@@ -1,6 +1,8 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System;
+using System.Numerics;
+
 
 public class Board
 {
@@ -12,70 +14,45 @@ public class Board
         UPPERBOUND
     }
 
-    public Player[] board;
-    public int[] heights;
+    public ulong redBitboard;
+    public ulong yellowBitboard;
     public int nodes;
-    public int ttnodes;
+    public int[] heights;
+    public int[] redHeights;
+    public int[] yellowHeights;
     public Dictionary<ulong, TTEntry> tt;
+
+    public int[] redPositionalVals = new int[7] { 0, 1, 2, 3, 2, 1, 0};
+    public int[] yellowPositionVals = new int[7] { 0, 1, 2, 3, 2, 1, 0};
 
     public ulong zobristHash;
     private ulong[] zobristTable;
-    private int[] redCounts;
-    private int[] yellowCounts;
-
-    private int[] redRowCounts;
-    private int[] yellowRowCounts;
 
     public Board()
     {
+        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
         InitiateBoard();
         InitializeZobrist();
     }
-
     // 0, 1, 2, .., 5 = first column
     public void InitiateBoard()
     {
-        board = new Player[42];
-        heights = new int[7];
-        redCounts = new int[7];
-        yellowCounts = new int[7];
-        redRowCounts = new int[6];
-        yellowRowCounts = new int[6];
-        for (int i = 0; i < 7; i++)
-        {
-            heights[i] = 0;
-            redCounts[i] = 0;
-            yellowCounts[i] = 0;
-            if (i != 6)
-            {
-                redRowCounts[i] = 0;
-                yellowRowCounts[i] = 0;
-            }
-        }
-        for (int i = 0; i < 42; i++)
-        {
-            board[i] = Player.None;
-        }
+        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
+        redHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
+        yellowHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
+
+        redBitboard = 0;
+        yellowBitboard = 0;
         tt = new Dictionary<ulong, TTEntry>();
     }
 
     public void ResetBoard()
     {
-        for (int i = 0; i < 7; i++)
-        {
-            heights[i] = 0;
-            redCounts[i] = 0;
-            yellowCounts[i] = 0;
-            if (i != 6)
-            {
-                redRowCounts[i] = 0;
-                yellowRowCounts[i] = 0;
-            }
-        }
-        for (int i = 0; i < 42; i++)
-        {
-            board[i] = Player.None;
-        }
+        redBitboard = 0;
+        yellowBitboard = 0;
+        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
+        redHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
+        yellowHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
         tt.Clear();
         zobristHash = 0;
     }
@@ -123,7 +100,7 @@ public class Board
         {
             if (winningPlayer == Player.Red)
             {
-                float finalEval = (1000000 + depth) + UnityEngine.Random.Range(-1f, 1f) * 0.01f;
+                float finalEval = (1000000 + depth) + UnityEngine.Random.Range(-0.01f, 0.01f);
                 MoveEval bestMove = new MoveEval(-1, finalEval);
 
                 // Store in TT
@@ -133,7 +110,7 @@ public class Board
             }
             else
             {
-                float finalEval = -(1000000 + depth) + UnityEngine.Random.Range(-1f, 1f) * 0.01f;
+                float finalEval = -(1000000 + depth) + UnityEngine.Random.Range(-0.01f, 0.01f);
                 MoveEval bestMove = new MoveEval(-1, finalEval);
 
                 // Store in TT
@@ -143,15 +120,15 @@ public class Board
         }
         if (IsFull())
         {
-            // Heuristic
-            float finalEvaluation = UnityEngine.Random.Range(-1f, 1f) * 0.01f;
+            float finalEvaluation = UnityEngine.Random.Range(-0.01f, 0.01f);
             MoveEval bestMove = new MoveEval(-1, finalEvaluation);
             StoreTT(finalEvaluation, -1, depth, alphaOriginal, beta);
             return bestMove;
         }
         if (depth == 0)
         {
-            float eval = HeuristicEvaluation();
+            // Heruistic
+            float eval = HeuristicEvaluation() + UnityEngine.Random.Range(-0.01f, 0.01f);
             MoveEval bestMove = new MoveEval(-1, eval);
             StoreTT(eval, -1, depth, alphaOriginal, beta);
             return bestMove;
@@ -213,8 +190,8 @@ public class Board
     public void InitializeZobrist()
     {
         var random = new System.Random();
-        zobristTable = new ulong[84];
-        for (int i = 0; i < 84; i++)
+        zobristTable = new ulong[128];
+        for (int i = 0; i < 128; i++)
         {
             ulong sixteenBits = (ulong)random.Next(1 << 16);
             ulong sixteenBits2 = (ulong)random.Next(1 << 16);
@@ -228,10 +205,12 @@ public class Board
 
     public float HeuristicEvaluation()
     {
-        float evaluation = 0;
-        // Random jiggle
-        evaluation += UnityEngine.Random.Range(-1f, 1f) * 0.01f;
-
+        float evaluation = 0f;
+        for (int i = 0; i < 7; i++)
+        {
+            evaluation += redHeights[i] * redPositionalVals[i];
+            evaluation -= yellowHeights[i] * yellowPositionVals[i];
+        }
         return evaluation;
     }
 
@@ -281,302 +260,59 @@ public class Board
         return sortedMoves;
     }
 
+    private bool HasConnectFour(ulong b)
+    {
+        // 1) Vertical check (shift by 1)
+        {
+            ulong m = b & (b >> 1);
+            // If we can still find 2 more consecutive after that, there is a 4.
+            if ((m & (m >> 2)) != 0UL)
+                return true;
+        }
+
+        // 2) Horizontal check (shift by 6)
+        {
+            ulong m = b & (b >> 8);
+            if ((m & (m >> 16)) != 0UL)
+                return true;
+        }
+
+        // 3) Diagonal up-right (shift by 7)
+        {
+            ulong m = b & (b >> 9);
+            if ((m & (m >> 18)) != 0UL)
+                return true;
+        }
+
+        // 4) Diagonal up-left (shift by 5)
+        {
+            ulong m = b & (b >> 7);
+            if ((m & (m >> 14)) != 0UL)
+                return true;
+        }
+
+        return false;
+    }
+
 
     public Player GetWinningPlayer()
     {
-        for (int i = 0; i < 7; i++)
-        {
-            for (int j = 0; j < heights[i] - 3; j++)
-            {
-                Player endingValue = board[6 * i + j + 3];
-                bool connectFour = true;
-                for (int k = 0; k < 3; k++)
-                {
-                    if (board[6 * i + j + k] != endingValue)
-                    {
-                        connectFour = false;
-                        break;
-                    }
-                }
-                if (connectFour)
-                {
-                    return endingValue;
-                }
-            }
+        if (HasConnectFour(redBitboard)) {
+            return Player.Red;
         }
-        // Rows
-        for (int j = 0; j < 6; j++)
-        {
-            for (int i = 0; i < 4; i++)
-            {
-                Player endingValue = board[6 * (i + 3) + j];
-                if (endingValue == Player.None)
-                {
-                    break;
-                }
-                bool connectFour = true;
-                for (int k = 0; k < 3; k++)
-                {
-                    if (board[6 * (i + k) + j] != endingValue)
-                    {
-                        connectFour = false;
-                        break;
-                    }
-                }
-                if (connectFour)
-                {
-                    return endingValue;
-                }
-            }
-        }
-        // Diagonals going down-right
-        for (int i = 0; i < 4; i++)
-        {
-            for (int j = 3; j < 6; j++)
-            {
-                // Top left value
-                Player endingValue = board[6 * i + j];
-                bool connectFour = true;
-                for (int k = 1; k < 4; k++)
-                {
-                    if (board[6 * (i + k) + (j - k)] != endingValue)
-                    {
-                        connectFour = false;
-                        break;
-                    }
-                }
-                if (connectFour)
-                {
-                    return endingValue;
-                }
-            }
-        }
-        // Diagonals going down-left
-        for (int i = 3; i < 7; i++)
-        {
-            for (int j = 3; j < 6; j++)
-            {
-                // Top right value
-                Player endingValue = board[6 * i + j];
-                bool connectFour = true;
-                for (int k = 1; k < 4; k++)
-                {
-                    if (board[6 * (i - k) + (j - k)] != endingValue)
-                    {
-                        connectFour = false;
-                        break;
-                    }
-                }
-                if (connectFour)
-                {
-                    return endingValue;
-                }
-            }
+        if (HasConnectFour(yellowBitboard)) {
+            return Player.Yellow;
         }
         return Player.None;
     }
-    /*
-    public float WindowScore()
-    {
-        float score = 0;
 
-        for (int i = 0; i < 7; i++)
-        {
-            for (int j = 0; j < heights[i] - 3; j++)
-            {
-                int numEmpty = 0;
-                int numRed = 0;
-                int numYellow = 0;
-                for (int k = 0; k < 4; k++)
-                {
-                    Player val = board[6 * i + j + k];
-                    if (val == Player.None)
-                    {
-                        numEmpty += 1;
-                    }
-                    else if (val == Player.Red)
-                    {
-                        numRed += 1;
-                    }
-                    else
-                    {
-                        numYellow += 1;
-                    }
-                }
-                if (numRed > 1 && numYellow == 0)
-                {
-                    if (numRed == 3)
-                    {
-                        score += windowScore3;
-                    }
-                    else
-                    {
-                        score += windowScore2;
-                    }
-                }
-                if (numYellow > 1 && numRed == 0)
-                {
-                    if (numYellow == 3)
-                    {
-                        score -= windowScore3;
-                    }
-                    else
-                    {
-                        score -= windowScore2;
-                    }
-                }
-            }
-        }
-        // Rows
-        for (int j = 0; j < 6; j++)
-        {
-            for (int i = 0; i < 4; i++)
-            {
-                int numEmpty = 0;
-                int numRed = 0;
-                int numYellow = 0;
-
-                for (int k = 0; k < 4; k++)
-                {
-                    Player val = board[6 * (i + k) + j];
-                    if (val == Player.None)
-                    {
-                        numEmpty += 1;
-                    }
-                    else if (val == Player.Red)
-                    {
-                        numRed += 1;
-                    }
-                    else
-                    {
-                        numYellow += 1;
-                    }
-                }
-                if (numRed > 1 && numYellow == 0)
-                {
-                    if (numRed == 3)
-                    {
-                        score += windowScore3;
-                    }
-                    else
-                    {
-                        score += windowScore2;
-                    }
-                }
-                if (numYellow > 1 && numRed == 0)
-                {
-                    if (numYellow == 3)
-                    {
-                        score -= windowScore3;
-                    }
-                    else
-                    {
-                        score -= windowScore2;
-                    }
-                }
-            }
-        }
-        // Diagonals going down-right
-        for (int i = 0; i < 4; i++)
-        {
-            for (int j = 3; j < 6; j++)
-            {
-                int numEmpty = 0;
-                int numRed = 0;
-                int numYellow = 0;
-                // Top left value
-                for (int k = 0; k < 4; k++)
-                {
-                    Player val = board[6 * (i + k) + (j - k)];
-                    if (val == Player.None)
-                    {
-                        numEmpty += 1;
-                    }
-                    else if (val == Player.Red)
-                    {
-                        numRed += 1;
-                    }
-                    else
-                    {
-                        numYellow += 1;
-                    }
-                }
-                if (numRed > 1 && numYellow == 0)
-                {
-                    if (numRed == 3)
-                    {
-                        score += windowScore3;
-                    }
-                    else
-                    {
-                        score += windowScore2;
-                    }
-                }
-                if (numYellow > 1 && numRed == 0)
-                {
-                    if (numYellow == 3)
-                    {
-                        score -= windowScore3;
-                    }
-                    else
-                    {
-                        score -= windowScore2;
-                    }
-                }
-            }
-        }
-        // Diagonals going down-left
-        for (int i = 3; i < 7; i++)
-        {
-            for (int j = 3; j < 6; j++)
-            {
-                int numEmpty = 0;
-                int numRed = 0;
-                int numYellow = 0;
-                // Top right value
-                for (int k = 0; k < 4; k++)
-                {
-                    Player val = board[6 * (i - k) + (j - k)];
-                    if (val == Player.None)
-                    {
-                        numEmpty += 1;
-                    }
-                    else if (val == Player.Red)
-                    {
-                        numRed += 1;
-                    }
-                    else
-                    {
-                        numYellow += 1;
-                    }
-                }
-                if (numRed > 1 && numYellow == 0)
-                {
-                    if (numRed == 3)
-                    {
-                        score += windowScore3;
-                    }
-                    else
-                    {
-                        score += windowScore2;
-                    }
-                }
-                if (numYellow > 1 && numRed == 0)
-                {
-                    if (numYellow == 3)
-                    {
-                        score -= windowScore3;
-                    }
-                    else
-                    {
-                        score -= windowScore2;
-                    }
-                }
-            }
-        }
-        return score;
+    public Player GetBit(int position) {
+        bool redVal = (redBitboard & ((ulong)1 << position)) != 0;
+        if (redVal) return Player.Red;
+        bool yellowVal = (yellowBitboard & ((ulong)1 << position)) != 0;
+        if (yellowVal) return Player.Yellow;
+        return Player.None;
     }
-    */
 
     public bool IsFull()
     {
@@ -592,43 +328,58 @@ public class Board
 
     public void MakeMove(int column, Player player)
     {
+        // First 6 = column 1 (row 1-6)
+        // Next 6 = column 2 (row 1-6)
+        // etc
+
+        int bitPosition = 8 * column + heights[column];
         if (player == Player.Red)
         {
-            redCounts[column] += 1;
-            redRowCounts[heights[column]] += 1;
-            zobristHash ^= zobristTable[2 * (6 * column + heights[column])];
+            redBitboard |= ((ulong)1 << bitPosition);
+            zobristHash ^= zobristTable[2 * bitPosition];
+            redHeights[column] += 1;
         }
         else
         {
-            yellowCounts[column] += 1;
-            yellowRowCounts[heights[column]] += 1;
-            zobristHash ^= zobristTable[2 * (6 * column + heights[column]) + 1];
+            yellowBitboard |= ((ulong)1 << bitPosition);
+            zobristHash ^= zobristTable[2 * bitPosition + 1];
+            yellowHeights[column] += 1;
         }
-        board[6 * column + heights[column]] = player;
         heights[column] += 1;
     }
 
     public void UnmakeMove(int column, Player player)
     {
+        int bitPosition = 8 * column + heights[column] - 1;
         if (player == Player.Red)
         {
-            redCounts[column] -= 1;
-            redRowCounts[heights[column] - 1] -= 1;
-            zobristHash ^= zobristTable[2 * (6 * column + heights[column] - 1)];
+            redBitboard = redBitboard & ~((ulong)1 << bitPosition);
+            zobristHash ^= zobristTable[2 * bitPosition];
+            redHeights[column] -= 1;
         }
         else
         {
-            yellowCounts[column] -= 1;
-            yellowRowCounts[heights[column] - 1] -= 1;
-            zobristHash ^= zobristTable[2 * (6 * column + heights[column] - 1) + 1];
+            yellowBitboard = yellowBitboard & ~((ulong)1 << bitPosition);
+            zobristHash ^= zobristTable[2 * bitPosition + 1];
+            yellowHeights[column] -= 1;
         }
-        board[6 * column + heights[column] - 1] = Player.None;
         heights[column] -= 1;
     }
 
     public bool IsValidMove(int column)
     {
         return heights[column] < 6;
+    }
+
+    public static int CountBits(ulong value)
+    {
+        int count = 0;
+        while (value != 0)
+        {
+            count++;
+            value &= value - 1;
+        }
+        return count;
     }
 
     public struct MoveEval

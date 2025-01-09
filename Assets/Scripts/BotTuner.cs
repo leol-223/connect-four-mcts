@@ -4,10 +4,12 @@ using UnityEngine.UI;
 public class BotTuner : MonoBehaviour
 {
     public int numGames;
-    public int depth;
+    public int depthA;
+    public int depthB;
     public TMPro.TMP_Text bWins;
     public TMPro.TMP_Text bDraws;
     public TMPro.TMP_Text bLosses;
+    public TMPro.TMP_Text bElo;
 
     private BoardTestA boardA;
     private BoardTestB boardB;
@@ -48,7 +50,7 @@ public class BotTuner : MonoBehaviour
     {
         if (numGamesPlayed < numGames)
         {
-            BoardTestA.Player result1 = GetGameResult(depth, true);
+            BoardTestA.Player result1 = GetGameResult(depthA, depthB, true);
             if (result1 != BoardTestA.Player.None)
             {
                 for (int i = 0; i < boardA.board.Length; i++)
@@ -87,7 +89,7 @@ public class BotTuner : MonoBehaviour
             }
             numGamesPlayed += 1;
 
-            BoardTestA.Player result2 = GetGameResult(depth, false);
+            BoardTestA.Player result2 = GetGameResult(depthA, depthB, false);
             if (result2 != BoardTestA.Player.None)
             {
                 for (int i = 0; i < boardA.board.Length; i++)
@@ -128,7 +130,7 @@ public class BotTuner : MonoBehaviour
 
             numGamesPlayed += 1;
 
-            /*
+            
             string rowString = "Rows: ";
             for (int i = 0; i < 6; i++)
             {
@@ -143,14 +145,32 @@ public class BotTuner : MonoBehaviour
             }
             Debug.Log(rowString);
             Debug.Log(columnString);
-            */
+            
+        }
+        float N = numWins + numDraws + numLosses;
+        if (N > 0)
+        {
+            float w = (numWins + numDraws / 2) / N;
+            if (w < 1 && w > 0)
+            {
+                float eloDif = -400 * Mathf.Log10(1 / w - 1);
+                float se = 400 / (Mathf.Sqrt(N) * Mathf.Log(10));
+                string variation = Mathf.RoundToInt(1.96f * se).ToString();
+                if (eloDif > 0)
+                {
+                    bElo.text = "Elo change: +" + Mathf.RoundToInt(eloDif).ToString() + " (Variation: " + variation + ")";
+                } else
+                {
+                    bElo.text = "Elo change: " + Mathf.RoundToInt(eloDif).ToString() + " (Variation: " + variation + ")";
+                }
+            }
         }
         bWins.text = numWins.ToString() + " wins";
         bDraws.text = numDraws.ToString() + " draws";
         bLosses.text = numLosses.ToString() + " losses";
     }
 
-    BoardTestA.Player GetGameResult(int depth, bool aIsRed) {
+    BoardTestA.Player GetGameResult(int depthA, int depthB, bool aIsRed) {
         boardA.ResetBoard();
         boardB.ResetBoard();
 
@@ -160,14 +180,14 @@ public class BotTuner : MonoBehaviour
             while (true)
             {
                 boardA.tt.Clear();
-                BoardTestA.MoveEval move = boardA.GetBestMove(depth, Mathf.NegativeInfinity, Mathf.Infinity, true, -1);
+                BoardTestA.MoveEval move = boardA.GetBestMove(depthA, Mathf.NegativeInfinity, Mathf.Infinity, true, -1);
                 boardA.MakeMove(move.Move, BoardTestA.Player.Red);
                 boardB.MakeMove(move.Move, BoardTestB.Player.Red);
                 if (boardA.GetWinningPlayer() != BoardTestA.Player.None || boardA.IsFull()) {
                     break;
                 }
                 boardB.tt.Clear();
-                BoardTestB.MoveEval move2 = boardB.GetBestMove(depth, Mathf.NegativeInfinity, Mathf.Infinity, false, -1);
+                BoardTestB.MoveEval move2 = boardB.GetBestMove(depthB, Mathf.NegativeInfinity, Mathf.Infinity, false, -1);
                 boardA.MakeMove(move2.Move, BoardTestA.Player.Yellow);
                 boardB.MakeMove(move2.Move, BoardTestB.Player.Yellow);
                 if (boardA.GetWinningPlayer() != BoardTestA.Player.None || boardA.IsFull())
@@ -180,7 +200,7 @@ public class BotTuner : MonoBehaviour
             while (true)
             {
                 boardB.tt.Clear();
-                BoardTestB.MoveEval move = boardB.GetBestMove(depth, Mathf.NegativeInfinity, Mathf.Infinity, true, -1);
+                BoardTestB.MoveEval move = boardB.GetBestMove(depthB, Mathf.NegativeInfinity, Mathf.Infinity, true, -1);
                 boardA.MakeMove(move.Move, BoardTestA.Player.Red);
                 boardB.MakeMove(move.Move, BoardTestB.Player.Red);
                 if (boardA.GetWinningPlayer() != BoardTestA.Player.None || boardA.IsFull())
@@ -189,7 +209,7 @@ public class BotTuner : MonoBehaviour
                 }
 
                 boardA.tt.Clear();
-                BoardTestA.MoveEval move2 = boardA.GetBestMove(depth, Mathf.NegativeInfinity, Mathf.Infinity, false, -1);
+                BoardTestA.MoveEval move2 = boardA.GetBestMove(depthA, Mathf.NegativeInfinity, Mathf.Infinity, false, -1);
                 boardA.MakeMove(move2.Move, BoardTestA.Player.Yellow);
                 boardB.MakeMove(move2.Move, BoardTestB.Player.Yellow);
                 if (boardA.GetWinningPlayer() != BoardTestA.Player.None || boardA.IsFull())

@@ -80,12 +80,11 @@ public class GameManager : MonoBehaviour
                             currentDepth += 1;
                             // the ai goes here :D
                             board.nodes = 0;
-                            board.ttnodes = 0;
                             float startTime = Time.realtimeSinceStartup;
                             Board.MoveEval move = board.GetBestMove(currentDepth, Mathf.NegativeInfinity, Mathf.Infinity, currentPlayer == Board.Player.Red, prevBest);
                             prevBest = move.Move;
                             float endTime = Time.realtimeSinceStartup;
-                            Debug.Log($"Col {move.Move+1} (depth {currentDepth}) | Evaluation: {Mathf.RoundToInt(move.Eval)} ({board.nodes} nodes visitted in {Mathf.RoundToInt((endTime - startTime) * 1000)} ms)");
+                            Debug.Log($"Col {move.Move+1} (depth {currentDepth}) | Evaluation: {Mathf.RoundToInt(move.Eval*10) / 10f} | {board.nodes} nodes visitted in {Mathf.RoundToInt((endTime - startTime) * 1000)} ms | {Mathf.RoundToInt(board.nodes/(1000000*(endTime-startTime))*100)/100f}M nps");
                             ShowPointer(currentPlayer, move.Move);
                             if (currentDepth == searchDepths[aiPlayers.IndexOf(currentPlayer)])
                             {
@@ -167,6 +166,15 @@ public class GameManager : MonoBehaviour
             tokenObjects[position * 6 + (board.heights[position] - 1)] = slidingToken;
             SwitchPlayer();
         }
+        /*
+        int[] drawIndexes = new int[] {0, 7, 14, 21};
+        for (int i = 0; i < drawIndexes.Length; i++)
+        {
+            if (tokenObjects[drawIndexes[i]] != null) {
+                tokenObjects[drawIndexes[i]].GetComponent<SpriteRenderer>().color = new Color(0, 0, 0);
+            };
+        }
+        */
     }
 
     public void CreateToken() {
@@ -218,13 +226,13 @@ public class GameManager : MonoBehaviour
         {
             for (int j = 0; j < board.heights[i] - 3; j++)
             {
-                Board.Player endingValue = board.board[6 * i + j + 3];
+                Board.Player endingValue = board.GetBit(8 * i + j + 3);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j + 3;
                 bool connectFour = true;
                 for (int k = 0; k < 3; k++)
                 {
-                    if (board.board[6 * i + j + k] != endingValue)
+                    if (board.GetBit(8 * i + j + k) != endingValue)
                     {
                         connectFour = false;
                         break;
@@ -242,7 +250,7 @@ public class GameManager : MonoBehaviour
         {
             for (int i = 0; i < 4; i++)
             {
-                Board.Player endingValue = board.board[6 * (i + 3) + j];
+                Board.Player endingValue = board.GetBit(8 * (i + 3) + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * (i + 3) + j;
                 if (endingValue == Board.Player.None)
@@ -252,7 +260,7 @@ public class GameManager : MonoBehaviour
                 bool connectFour = true;
                 for (int k = 0; k < 3; k++)
                 {
-                    if (board.board[6 * (i + k) + j] != endingValue)
+                    if (board.GetBit(8 * (i + k) + j) != endingValue)
                     {
                         connectFour = false;
                         break;
@@ -271,13 +279,13 @@ public class GameManager : MonoBehaviour
             for (int j = 3; j < board.heights[i]; j++)
             {
                 // Top left value
-                Board.Player endingValue = board.board[6 * i + j];
+                Board.Player endingValue = board.GetBit(8 * i + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j;
                 bool connectFour = true;
                 for (int k = 1; k < 4; k++)
                 {
-                    if (board.board[6 * (i + k) + (j - k)] != endingValue)
+                    if (board.GetBit(8 * (i + k) + (j - k)) != endingValue)
                     {
                         connectFour = false;
                         break;
@@ -296,13 +304,13 @@ public class GameManager : MonoBehaviour
             for (int j = 3; j < board.heights[i]; j++)
             {
                 // Top right value
-                Board.Player endingValue = board.board[6 * i + j];
+                Board.Player endingValue = board.GetBit(8 * i + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j;
                 bool connectFour = true;
                 for (int k = 1; k < 4; k++)
                 {
-                    if (board.board[6 * (i - k) + (j - k)] != endingValue)
+                    if (board.GetBit(8 * (i - k) + (j - k)) != endingValue)
                     {
                         connectFour = false;
                         break;
