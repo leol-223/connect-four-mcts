@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.IO;
 using UnityEngine.UI;
 
 public class BotTuner : MonoBehaviour
@@ -23,6 +24,7 @@ public class BotTuner : MonoBehaviour
     private float[] avgColumnLoss;
     private float[] avgRowWin;
     private float[] avgRowLoss;
+
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
@@ -51,29 +53,6 @@ public class BotTuner : MonoBehaviour
         if (numGamesPlayed < numGames)
         {
             BoardTestA.Player result1 = GetGameResult(depthA, depthB, true);
-            if (result1 != BoardTestA.Player.None)
-            {
-                for (int i = 0; i < boardA.board.Length; i++)
-                {
-                    BoardTestA.Player token = boardA.board[i];
-                    if (token == BoardTestA.Player.None)
-                    {
-                        continue;
-                    }
-                    int column = i / 6;
-                    int row = i % 6;
-                    if (token == result1)
-                    {
-                        avgColumnWin[column] += 0f;
-                        avgRowWin[row] += 0f;
-                    }
-                    else
-                    {
-                        avgColumnLoss[column] += 0f;
-                        avgRowLoss[row] += 0f;
-                    }
-                }
-            }
 
             // Result when A is red, B is yellow
             if (result1 == BoardTestA.Player.Red)
@@ -90,29 +69,6 @@ public class BotTuner : MonoBehaviour
             numGamesPlayed += 1;
 
             BoardTestA.Player result2 = GetGameResult(depthA, depthB, false);
-            if (result2 != BoardTestA.Player.None)
-            {
-                for (int i = 0; i < boardA.board.Length; i++)
-                {
-                    BoardTestA.Player token = boardA.board[i];
-                    if (token == BoardTestA.Player.None)
-                    {
-                        continue;
-                    }
-                    int column = i / 6;
-                    int row = i % 6;
-                    if (token == result2)
-                    {
-                        avgColumnWin[column] += 1f;
-                        avgRowWin[row] += 1f;
-                    }
-                    else
-                    {
-                        avgColumnLoss[column] += 1f;
-                        avgRowLoss[row] += 1f;
-                    }
-                }
-            }
 
             // Result when B is red, A is yellow
             if (result2 == BoardTestA.Player.Red)

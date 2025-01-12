@@ -22,8 +22,8 @@ public class BoardTestA
     public int[] yellowHeights;
     public Dictionary<ulong, TTEntry> tt;
 
-    public int[] redPositionalVals = new int[7] { 0, 1, 2, 3, 2, 1, 0 };
-    public int[] yellowPositionVals = new int[7] { 0, 1, 2, 3, 2, 1, 0 };
+    public float[] redPositionalVals = new float[7] { 0, 1, 2, 3, 2, 1, 0 };
+    public float[] yellowPositionVals = new float[7] { 0, 1, 2, 3, 2, 1, 0 };
 
     public ulong zobristHash;
     private ulong[] zobristTable;

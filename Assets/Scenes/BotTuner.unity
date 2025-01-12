@@ -642,6 +642,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1014516908}
   - component: {fileID: 1014516909}
+  - component: {fileID: 1014516910}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -679,6 +680,25 @@ MonoBehaviour:
   numGames: 1000
   depthA: 8
   depthB: 8
+  bWins: {fileID: 139012337}
+  bDraws: {fileID: 895048923}
+  bLosses: {fileID: 930050981}
+  bElo: {fileID: 1694283351}
+--- !u!114 &1014516910
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1014516907}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 07d9926aaedf44895b13ea8c5e9b8c37, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  numGames: 100
+  depthA: 6
+  depthB: 6
   bWins: {fileID: 139012337}
   bDraws: {fileID: 895048923}
   bLosses: {fileID: 930050981}
