@@ -10,12 +10,14 @@ public class NNTest : MonoBehaviour
     public int numIterationsPerUpdate;
     public int maxIterations;
     NeuralNetwork nn;
+    private bool isSaved = false;
 
     int counter = 0;
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        nn = new NeuralNetwork(shape, NeuralNetwork.Tanh, NeuralNetwork.Softmax, NeuralNetwork.TanhDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Sigmoid, NeuralNetwork.ReLUDerivative, NeuralNetwork.SigmoidDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        // nn.LoadNetwork("test.json");
     }
 
     // Update is called once per frame
@@ -38,20 +40,24 @@ public class NNTest : MonoBehaviour
                     float[] output;
                     if (inCircle)
                     {
-                        output = new float[] { 1, 0 };
+                        output = new float[] { 1 };
                     } else
                     {
-                        output = new float[] { 0, 1 };
+                        output = new float[] { 0 };
                     }
                     inputs.Add(input);
                     outputs.Add(output);
                 }
 
-                float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 16);
+                float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 15);
                 text.text = "Cost: " + avgCost.ToString();
 
                 counter += 1;
             }
+        } else if (!isSaved)
+        {
+            // nn.SaveNetwork("test.json");
+            isSaved = true;
         }
     }
 }

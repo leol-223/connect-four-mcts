@@ -21,6 +21,7 @@ public class BoardTestB
     public int[] redHeights;
     public int[] yellowHeights;
     public Dictionary<ulong, TTEntry> tt;
+    public NeuralNetwork nn;
 
     // 0.9278289 0.1010287 0.9515629 0.6687211 0.8513681 0.3586796 0.315052
 
@@ -35,6 +36,9 @@ public class BoardTestB
         heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
         InitiateBoard();
         InitializeZobrist();
+        int[] shape = new int[4] { 84, 20, 20, 3 };
+        nn = new NeuralNetwork(shape, NeuralNetwork.Tanh, NeuralNetwork.Softmax, NeuralNetwork.TanhDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        nn.LoadNetwork("Connect-Depth4-Gen1");
     }
     // 0, 1, 2, .., 5 = first column
     public void InitiateBoard()
@@ -130,7 +134,7 @@ public class BoardTestB
         if (depth == 0)
         {
             // Heruistic
-            float eval = HeuristicEvaluation() + UnityEngine.Random.Range(-0.01f, 0.01f);
+            float eval = HeuristicEvaluation();
             MoveEval bestMove = new MoveEval(-1, eval);
             StoreTT(eval, -1, depth, alphaOriginal, beta);
             return bestMove;
@@ -207,13 +211,7 @@ public class BoardTestB
 
     public float HeuristicEvaluation()
     {
-        float evaluation = 0f;
-        for (int i = 0; i < 7; i++)
-        {
-            evaluation += redHeights[i] * redPositionalVals[i];
-            evaluation -= yellowHeights[i] * yellowPositionVals[i];
-        }
-        return evaluation;
+        return EvaluatePosition(redBitboard, yellowBitboard);
     }
 
     public List<int> GetValidMoves()
@@ -437,5 +435,43 @@ public class BoardTestB
             Depth = depth;
             Type = type;
         }
+    }
+
+    public float[] GetNeuralInput(ulong redBitboard, ulong yellowBitboard)
+    {
+        bool[] bits = new bool[128];
+
+        for (int i = 0; i < 64; i++)
+        {
+            bits[i] = (redBitboard & (1UL << i)) != 0;
+            bits[64 + i] = (yellowBitboard & (1UL << i)) != 0;
+        }
+
+        // Create the output array for 84 floats
+        float[] result = new float[84];
+
+        // Copy every 6 bits, skipping 2 buffer bits after every 6 bits
+        int resultIndex = 0;
+        for (int i = 0; i < bits.Length; i += 8)
+        {
+            for (int j = 0; j < 6; j++) // Copy 6 bits as floats
+            {
+                if (resultIndex < 84)
+                {
+                    result[resultIndex++] = bits[i + j] ? 1.0f : 0.0f;
+                }
+            }
+            // Skip the 2 buffer bits
+        }
+
+        return result;
+    }
+
+    public float EvaluatePosition(ulong redBitboard, ulong yellowBitboard)
+    {
+        float[] result = GetNeuralInput(redBitboard, yellowBitboard);
+
+        float[] evaluation = nn.Evaluate(result);
+        return evaluation[0] + evaluation[1] / 2f;
     }
 }

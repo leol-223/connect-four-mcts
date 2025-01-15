@@ -1,8 +1,5 @@
 using UnityEngine;
 using System.Collections.Generic;
-using System;
-using System.Numerics;
-
 
 public class Board
 {
@@ -34,6 +31,7 @@ public class Board
         InitiateBoard();
         InitializeZobrist();
     }
+
     // 0, 1, 2, .., 5 = first column
     public void InitiateBoard()
     {
@@ -57,7 +55,13 @@ public class Board
         zobristHash = 0;
     }
 
-    public MoveEval GetBestMove(int depth, float alpha, float beta, bool isRed, int exploreFirst)
+    public int PickRandom(List<int> moves)
+    {
+        int index = UnityEngine.Random.Range(0, moves.Count);
+        return moves[index];
+    }
+
+    public MoveEval Minimax(int depth, float alpha, float beta, bool isRed, int exploreFirst)
     {
         nodes += 1;
         float alphaOriginal = alpha;
@@ -145,7 +149,7 @@ public class Board
             {
                 int column = moves[i];
                 MakeMove(column, Player.Red);
-                float eval = GetBestMove(depth - 1, alpha, beta, false, -1).Eval;
+                float eval = Minimax(depth - 1, alpha, beta, false, -1).Eval;
                 if (eval > bestValue)
                 {
                     bestValue = eval;
@@ -166,7 +170,7 @@ public class Board
             {
                 int column = moves[i];
                 MakeMove(column, Player.Yellow);
-                float eval = GetBestMove(depth - 1, alpha, beta, true, -1).Eval;
+                float eval = Minimax(depth - 1, alpha, beta, true, -1).Eval;
                 if (eval < bestValue)
                 {
                     bestMove2 = column;

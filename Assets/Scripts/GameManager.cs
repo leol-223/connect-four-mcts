@@ -4,7 +4,7 @@ using System.Collections.Generic;
 public class GameManager : MonoBehaviour
 {
     public List<Board.Player> aiPlayers;
-    public List<int> searchDepths;
+    public int searchIterations;
     public Color redColor;
     public Color yellowColor;
     public Color redPointerColor;
@@ -19,21 +19,29 @@ public class GameManager : MonoBehaviour
     public float boardPadding;
     public float yLevel;
     public float dropHeight;
+    public string valuePath;
+    public string policyPath;
+    public int[] sharedShape;
+    public int[] valueShape;
+    public int[] policyShape;
+    public SharedNeuralNetworks nn;
 
     private float minTokenDelay = 0.1f;
-    private Board board;
+    private BoardNN board;
     private GameObject pointer;
     private GameObject slidingToken;
     private GameObject endScreen;
     private GameObject[] tokenObjects;
     private float timeSinceEnd;
-    private int currentDepth = 0;
+    private int currentIter = 0;
     private bool isEnded = false;
     private bool isFirstPlayer = true;
     private bool isSlidingStage = true;
     private float timeSinceTokenDrop;
-    private int prevBest = -1;
+    private bool searchStarted = false;
+    private TreeNode rootNode;
     private Board.Player currentPlayer = Board.Player.Red;
+
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -46,7 +54,27 @@ public class GameManager : MonoBehaviour
         }
         tokenObjects = new GameObject[42];
         CreateEmptyBoard();
-        board = new Board();
+        board = new BoardNN();
+        rootNode = null;
+
+        nn = new SharedNeuralNetworks(
+            sharedShape,
+            valueShape,
+            policyShape,
+            NeuralNetwork.ReLU,              // Shared activation
+            NeuralNetwork.Tanh,              // Value output activation
+            NeuralNetwork.Softmax,           // Policy output activation
+            NeuralNetwork.ReLUDerivative,    // Shared derivative
+            NeuralNetwork.TanhDerivative,    // Value output derivative
+            NeuralNetwork.SoftmaxDerivative, // Policy output derivative
+            NeuralNetwork.MSE,               // Value error function
+            NeuralNetwork.CategoricalCrossEntropy, // Policy error function
+            NeuralNetwork.MSEDerivative,     // Value error derivative
+            NeuralNetwork.CategoricalCrossEntropyDerivative // Policy error derivative
+        );
+
+        nn.LoadNetworks(valuePath, policyPath);
+        board.nn = nn;
     }
 
     // Update is called once per frame
@@ -74,25 +102,33 @@ public class GameManager : MonoBehaviour
                 {
                     if (aiPlayers.Contains(currentPlayer))
                     {
-                        if (currentDepth < searchDepths[aiPlayers.IndexOf(currentPlayer)])
+                        if (currentIter < searchIterations)
                         {
-                            board.tt.Clear();
-                            currentDepth += 1;
-                            // the ai goes here :D
-                            board.nodes = 0;
+                            if (!searchStarted) {
+                                rootNode = board.GetRootNode(currentPlayer == Board.Player.Red);
+                                searchStarted = true;
+                                DebugPolicyOutputs(board.redBitboard, board.yellowBitboard);
+                            }
+                            /*
                             float startTime = Time.realtimeSinceStartup;
-                            Board.MoveEval move = board.GetBestMove(currentDepth, Mathf.NegativeInfinity, Mathf.Infinity, currentPlayer == Board.Player.Red, prevBest);
-                            prevBest = move.Move;
+                            BoardNN.MoveEval move = board.TreeSearch(searchIterations, isRed);
                             float endTime = Time.realtimeSinceStartup;
-                            Debug.Log($"Col {move.Move+1} (depth {currentDepth}) | Evaluation: {Mathf.RoundToInt(move.Eval*10) / 10f} | {board.nodes} nodes visitted in {Mathf.RoundToInt((endTime - startTime) * 1000)} ms | {Mathf.RoundToInt(board.nodes/(1000000*(endTime-startTime))*100)/100f}M nps");
+                            */
+                            for (int i = 0; i < 200; i++) {
+                                rootNode.Search();
+                                currentIter += 1;
+                            }
+                            BoardNN.MoveEval move = board.BestMove(rootNode);
+
+                            Debug.Log($"Col {move.Move + 1} | Evaluation: {move.Eval} | Max depth: {board.maxDepth}");
                             ShowPointer(currentPlayer, move.Move);
-                            if (currentDepth == searchDepths[aiPlayers.IndexOf(currentPlayer)])
+                            if (currentIter >= searchIterations)
                             {
-                                currentDepth = 0;
+                                currentIter = 0;
                                 CreateToken();
                                 MakeMove(move.Move);
                                 Destroy(pointer);
-                                prevBest = -1;
+                                searchStarted = false;
                             }
                         }
                     }
@@ -127,7 +163,7 @@ public class GameManager : MonoBehaviour
     }
 
     public void MakeMove(int position) {
-        if (!board.IsValidMove(position) || board.GetWinningPlayer() != Board.Player.None)
+        if (!board.IsValidMove(position) || board.GetWinningPlayer() != BoardNN.Player.None)
         {
             // Invalid move
         }
@@ -135,14 +171,14 @@ public class GameManager : MonoBehaviour
         {
             if (isFirstPlayer)
             {
-                board.MakeMove(position, Board.Player.Red);
+                board.MakeMove(position, BoardNN.Player.Red);
             }
             else
             {
-                board.MakeMove(position, Board.Player.Yellow);
+                board.MakeMove(position, BoardNN.Player.Yellow);
             }
-            Board.Player winningPlayer = board.GetWinningPlayer();
-            if (winningPlayer != Board.Player.None)
+            BoardNN.Player winningPlayer = board.GetWinningPlayer();
+            if (winningPlayer != BoardNN.Player.None)
             {
                 isEnded = true;
                 timeSinceEnd = 0;
@@ -226,7 +262,7 @@ public class GameManager : MonoBehaviour
         {
             for (int j = 0; j < board.heights[i] - 3; j++)
             {
-                Board.Player endingValue = board.GetBit(8 * i + j + 3);
+                BoardNN.Player endingValue = board.GetBit(8 * i + j + 3);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j + 3;
                 bool connectFour = true;
@@ -250,10 +286,10 @@ public class GameManager : MonoBehaviour
         {
             for (int i = 0; i < 4; i++)
             {
-                Board.Player endingValue = board.GetBit(8 * (i + 3) + j);
+                BoardNN.Player endingValue = board.GetBit(8 * (i + 3) + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * (i + 3) + j;
-                if (endingValue == Board.Player.None)
+                if (endingValue == BoardNN.Player.None)
                 {
                     break;
                 }
@@ -279,7 +315,7 @@ public class GameManager : MonoBehaviour
             for (int j = 3; j < board.heights[i]; j++)
             {
                 // Top left value
-                Board.Player endingValue = board.GetBit(8 * i + j);
+                BoardNN.Player endingValue = board.GetBit(8 * i + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j;
                 bool connectFour = true;
@@ -304,7 +340,7 @@ public class GameManager : MonoBehaviour
             for (int j = 3; j < board.heights[i]; j++)
             {
                 // Top right value
-                Board.Player endingValue = board.GetBit(8 * i + j);
+                BoardNN.Player endingValue = board.GetBit(8 * i + j);
                 int[] currentChain = new int[4];
                 currentChain[0] = 6 * i + j;
                 bool connectFour = true;
@@ -358,5 +394,46 @@ public class GameManager : MonoBehaviour
 
     float GetColumnProximity(float x) {
         return Mathf.Abs(((x + (7 * boardScale) / 2) / boardScale) % 1 - 0.5f);
+    }
+
+    public float[] GetNeuralInput(ulong redBitboard, ulong yellowBitboard)
+    {
+        bool[] bits = new bool[128];
+
+        for (int i = 0; i < 64; i++)
+        {
+            bits[i] = (redBitboard & (1UL << i)) != 0;
+            bits[64 + i] = (yellowBitboard & (1UL << i)) != 0;
+        }
+
+        // Create the output array for 84 floats
+        float[] result = new float[84];
+
+        // Copy every 6 bits, skipping 2 buffer bits after every 6 bits
+        int resultIndex = 0;
+        for (int i = 0; i < bits.Length; i += 8)
+        {
+            for (int j = 0; j < 6; j++) // Copy 6 bits as floats
+            {
+                if (resultIndex < 84)
+                {
+                    result[resultIndex++] = bits[i + j] ? 1.0f : 0.0f;
+                }
+            }
+            // Skip the 2 buffer bits
+        }
+
+        return result;
+    }
+
+    public void DebugPolicyOutputs(ulong redBitboard, ulong yellowBitboard)
+    {
+        float[] result = GetNeuralInput(redBitboard, yellowBitboard);
+
+        float[] evaluation = nn.GetPolicyPrediction(result);
+        for (int i = 0; i < 7; i++)
+        {
+            Debug.Log("Column " + i + ": " + evaluation[i]);
+        }
     }
 }
