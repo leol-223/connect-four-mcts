@@ -34,13 +34,10 @@ public class Layer {
     private int numInputs;
     private int numOutputs;
     private ActivationFunction activationFunction;
-
     public float[] preActivationOutput;
     public float[] postActivationOutput;
-
     public float[,] weights;
     public float[] biases;
-
     public float[,] weightGradients;
     public float[] biasGradients;
 
@@ -48,19 +45,14 @@ public class Layer {
         this.numInputs = numInputs;
         this.numOutputs = numOutputs;
         this.activationFunction = activationFunction;
-
         weights = new float[numOutputs, numInputs];
         biases = new float[numOutputs];
-        
-        preActivationOutput = new float[numOutputs];
-        postActivationOutput = new float[numOutputs];
-
         weightGradients = new float[numOutputs, numInputs];
         biasGradients = new float[numOutputs];
-
+        preActivationOutput = new float[numOutputs];
+        postActivationOutput = new float[numOutputs];
         // Xavier initialization
         float initializationRange = 1 / Mathf.Sqrt(numInputs);
-
         for (int i = 0; i < numOutputs; i++) {
             biases[i] = 0;
             biasGradients[i] = 0;
@@ -71,37 +63,16 @@ public class Layer {
         }
     }
 
-    [BurstCompile]
     public float[] CalculateOutput(float[] inputs) {
-        // Preallocate arrays as class fields instead of creating new ones each time
         for (int i = 0; i < numOutputs; i++) {
-        float sum = biases[i];
-        int vectorSize = 4;
-        int vectorCount = numInputs / vectorSize;
-        
-        for (int j = 0; j < vectorCount * vectorSize; j += vectorSize) {
-                float4 inputVec = new float4(
-                    inputs[j], inputs[j + 1], 
-                    inputs[j + 2], inputs[j + 3]
-                );
-                float4 weightVec = new float4(
-                    weights[i, j], weights[i, j + 1],
-                    weights[i, j + 2], weights[i, j + 3]
-                );
-                sum += math.dot(inputVec, weightVec);
+            preActivationOutput[i] = biases[i];
+            for (int j = 0; j < numInputs; j++) {
+                preActivationOutput[i] += inputs[j] * weights[i, j];
             }
-            
-            // Handle remaining elements
-            for (int j = vectorCount * vectorSize; j < numInputs; j++) {
-                sum += inputs[j] * weights[i, j];
-            }
-            
-            preActivationOutput[i] = sum;
         }
         postActivationOutput = activationFunction(preActivationOutput);
         return postActivationOutput;
     }
-
     public void ApplyGradients(float learningRate) {
         for (int i = 0; i < numOutputs; i++)
         {
@@ -114,7 +85,6 @@ public class Layer {
             }
         }
     }
-
     public void ResetGradients()
     {
         for (int i = 0; i < numOutputs; i++)
@@ -128,270 +98,34 @@ public class Layer {
     }
 }
 
-public class SharedNeuralNetworks
-{
-    private int[] sharedShape;
-    private int sharedLayerCount;
-    public Layer[] sharedLayers;
-    public NeuralNetwork network1;
-    public NeuralNetwork network2;
-    
-    public SharedNeuralNetworks(
-        int[] sharedShape, 
-        int[] network1Shape, 
-        int[] network2Shape,
-        ActivationFunction sharedActivation,
-        ActivationFunction network1OutputActivation,
-        ActivationFunction network2OutputActivation,
-        ActivationDerivative sharedDerivative,
-        ActivationDerivative network1OutputDerivative,
-        ActivationDerivative network2OutputDerivative,
-        ErrorFunction network1ErrorFunction,
-        ErrorFunction network2ErrorFunction,
-        ErrorDerivative network1ErrorDerivative,
-        ErrorDerivative network2ErrorDerivative)
-    {
-        this.sharedShape = sharedShape;
-        this.sharedLayerCount = sharedShape.Length - 1;
-        
-        Debug.Log($"Creating shared layers: {string.Join(",", sharedShape)}");
-        Debug.Log($"Creating value network: {string.Join(",", network1Shape)}");
-        Debug.Log($"Creating policy network: {string.Join(",", network2Shape)}");
-        
-        // Create shared layers
-        sharedLayers = new Layer[sharedLayerCount];
-        for (int i = 0; i < sharedLayerCount; i++)
-        {
-            sharedLayers[i] = new Layer(sharedShape[i], sharedShape[i + 1], sharedActivation);
-        }
-
-        // Verify shapes match at connection points
-        if (network1Shape[0] != sharedShape[sharedShape.Length - 1] ||
-            network2Shape[0] != sharedShape[sharedShape.Length - 1])
-        {
-            Debug.LogError("Network shapes don't match at shared layer connection point");
-        }
-
-        // Create individual networks with shared layers
-        network1 = new NeuralNetwork(
-            network1Shape, // Pass the complete shape
-            sharedActivation, 
-            network1OutputActivation,
-            sharedDerivative,
-            network1OutputDerivative,
-            network1ErrorFunction,
-            network1ErrorDerivative,
-            sharedLayers);
-
-        network2 = new NeuralNetwork(
-            network2Shape, // Pass the complete shape
-            sharedActivation,
-            network2OutputActivation,
-            sharedDerivative,
-            network2OutputDerivative,
-            network2ErrorFunction,
-            network2ErrorDerivative,
-            sharedLayers);
-    }
-
-    public float TrainOneEpoch(
-        List<float[]> inputData, 
-        List<float[]> outputData1,
-        List<float[]> outputData2,
-        float learningRate,
-        int batchSize)
-    {
-        float totalCost = 0f;
-        int batchCount = 0;
-
-        for (int i = 0; i < inputData.Count; i++)
-        {
-            float[] input = inputData[i];
-            float[] output1 = outputData1[i];
-            float[] output2 = outputData2[i];
-
-            // Calculate gradients for both networks
-            float cost1 = network1.CalculateGradients(input, output1);
-            float cost2 = network2.CalculateGradients(input, output2);
-            totalCost += (cost1 + cost2) / 2;
-
-            batchCount++;
-            if (batchCount >= batchSize)
-            {
-                ApplyGradients(learningRate, batchSize);
-                batchCount = 0;
-            }
-        }
-
-        if (batchCount > 0)
-        {
-            ApplyGradients(learningRate, batchSize);
-        }
-
-        return totalCost / inputData.Count;
-    }
-
-    private void ApplyGradients(float learningRate, int batchSize)
-    {
-        float lr = learningRate / batchSize;
-        
-        // Apply gradients to shared layers
-        for (int i = 0; i < sharedLayerCount; i++)
-        {
-            sharedLayers[i].ApplyGradients(lr);
-        }
-
-        // Apply gradients to unique layers of each network
-        network1.ApplyUniqueLayerGradients(lr, sharedLayerCount);
-        network2.ApplyUniqueLayerGradients(lr, sharedLayerCount);
-    }
-
-    public void SaveNetworks(string valueFilePath, string policyFilePath)
-    {
-        // Save value network (network1) with shared layers
-        Debug.Log("Saving networks with shared layer count: " + sharedLayerCount);
-        network1.SaveNetwork(valueFilePath, 0, 0);  // Save all layers including shared
-
-        // Save policy network (network2) without shared layers
-        network2.SaveNetwork(policyFilePath, sharedLayerCount, sharedLayerCount);  // Only save unique layers
-    }
-
-    public void LoadNetworks(string valueFilePath, string policyFilePath)
-    {
-        // Load value network (network1) completely
-        network1.LoadNetwork(valueFilePath, 0, 0);
-
-        // Update shared layers reference
-        for (int i = 0; i < sharedLayerCount; i++)
-        {
-            sharedLayers[i] = network1.layers[i];
-        }
-
-        // Load policy network (network2) unique layers only
-        network2.LoadNetwork(policyFilePath, sharedLayerCount, sharedLayerCount);
-
-        // Update policy network shared layers
-        for (int i = 0; i < sharedLayerCount; i++)
-        {
-            network2.layers[i] = sharedLayers[i];
-        }
-    }
-
-    public float[] GetValuePrediction(float[] input)
-    {
-        return network1.Evaluate(input);
-    }
-
-    public float[] GetPolicyPrediction(float[] input)
-    {
-        return network2.Evaluate(input);
-    }
-}
 
 public class NeuralNetwork
 {
     private int[] shape;
-    public Layer[] layers;
+    private Layer[] layers;
     private ActivationDerivative outputDerivative;
     private ActivationDerivative activationDerivative;
     private ErrorFunction errorFunction;
     private ErrorDerivative errorDerivative;
     private List<float[]> currentBiasDerivatives;
-
-    public NeuralNetwork(
-        int[] shape, 
-        ActivationFunction activationFunction, 
-        ActivationFunction outputActivation,
-        ActivationDerivative activationDerivative,
-        ActivationDerivative outputDerivative,
-        ErrorFunction errorFunction,
-        ErrorDerivative errorDerivative,
-        Layer[] sharedLayers = null)
-    {
-        // Calculate the complete shape including shared layers
-        if (sharedLayers != null)
-        {
-            // Create a new shape array that includes both shared and unique layers
-            int[] completeShape = new int[shape.Length + sharedLayers.Length];
-            
-            // First layer input size
-            completeShape[0] = sharedLayers[0].weights.GetLength(1);
-            
-            // Add shared layer sizes
-            for (int i = 0; i < sharedLayers.Length; i++)
-            {
-                completeShape[i + 1] = sharedLayers[i].weights.GetLength(0);
-            }
-            
-            // Add unique layer sizes
-            for (int i = 1; i < shape.Length; i++)
-            {
-                completeShape[i + sharedLayers.Length] = shape[i];
-            }
-            
-            this.shape = completeShape;
-        }
-        else
-        {
-            this.shape = shape;
-        }
-
+    public NeuralNetwork(int[] shape, ActivationFunction activationFunction, ActivationFunction outputActivation, ActivationDerivative activationDerivative, ActivationDerivative outputDerivative, ErrorFunction errorFunction, ErrorDerivative errorDerivative) {
+        this.shape = shape;
         int numLayers = shape.Length - 1;
         currentBiasDerivatives = new List<float[]>();
-        layers = new Layer[numLayers + (sharedLayers?.Length ?? 0)];
-
-        // Copy shared layers if provided
-        int startIndex = 0;
-        if (sharedLayers != null)
-        {
-            for (int i = 0; i < sharedLayers.Length; i++)
-            {
-                layers[i] = sharedLayers[i];
-                float[] emptyOutputs = new float[sharedLayers[i].weights.GetLength(0)];
-                currentBiasDerivatives.Add(emptyOutputs);
-            }
-            startIndex = sharedLayers.Length;
-        }
-
-        // Create remaining layers (except the last one)
-        for (int i = startIndex; i < layers.Length - 1; i++)
-        {
-            int inputSize;
-            if (i == startIndex) {
-                // First layer after shared layers (or first layer if no shared layers)
-                inputSize = sharedLayers != null ? 
-                    sharedLayers[sharedLayers.Length - 1].weights.GetLength(0) : 
-                    shape[0];
-            } else {
-                // Subsequent layers
-                inputSize = shape[i - startIndex - 1];
-            }
-            
-            int outputSize = shape[i - startIndex];
-            Debug.Log($"Creating layer {i} with input size {inputSize} and output size {outputSize}");
-            layers[i] = new Layer(inputSize, outputSize, activationFunction);
-            float[] emptyOutputs = new float[outputSize];
+        layers = new Layer[numLayers];
+        for (int i = 0; i < numLayers-1; i++) {
+            layers[i] = new Layer(shape[i], shape[i + 1], activationFunction);
+            float[] emptyOutputs = new float[shape[i + 1]];
             currentBiasDerivatives.Add(emptyOutputs);
         }
-
-        // Create output layer
-        int lastLayerIndex = layers.Length - 1;
-        int finalInputSize = (lastLayerIndex == startIndex) ? 
-            (sharedLayers != null ? sharedLayers[sharedLayers.Length - 1].weights.GetLength(0) : shape[0]) : 
-            shape[shape.Length - 2];
-        int finalOutputSize = shape[shape.Length - 1];
-        
-        Debug.Log($"Creating final layer with input size {finalInputSize} and output size {finalOutputSize}");
-        layers[lastLayerIndex] = new Layer(finalInputSize, finalOutputSize, outputActivation);
-        float[] empty = new float[finalOutputSize];
+        layers[numLayers - 1] = new Layer(shape[numLayers - 1], shape[numLayers], outputActivation);
+        float[] empty = new float[shape[numLayers]];
         currentBiasDerivatives.Add(empty);
-
         this.outputDerivative = outputDerivative;
         this.activationDerivative = activationDerivative;
         this.errorDerivative = errorDerivative;
         this.errorFunction = errorFunction;
     }
-
     public string DebugArray(string startingMessage, float[] arr)
     {
         string str = "[";
@@ -404,7 +138,6 @@ public class NeuralNetwork
         str += "]";
         return startingMessage + str;
     }
-
     public string DebugArray(string startingMessage, float[,] arr)
     {
         string str = "[";
@@ -421,7 +154,6 @@ public class NeuralNetwork
             str += currentBlock;
             str += ", ";
         }
-
         string block2 = "[";
         for (int j = 0; j < arr.GetLength(1) - 1; j++)
         {
@@ -432,10 +164,8 @@ public class NeuralNetwork
         block2 += "]";
         str += block2;
         str += "]";
-
         return startingMessage + str;
     }
-
     public float[] Evaluate(float[] inputs) {
         // DebugArray("INPUT: ", inputs);
         float[] runningOutput = inputs;
@@ -445,7 +175,6 @@ public class NeuralNetwork
         }
         return runningOutput;
     }
-
     public float TrainOneEpoch(List<float[]> inputData, List<float[]> outputData, float learningRate, int batchSize) {
         float totalCost = 0f;
         int batchCount = 0;
@@ -460,14 +189,11 @@ public class NeuralNetwork
                 ApplyGradients(learningRate, batchSize);
             }
         }
-
         if (batchCount > 0) {
             ApplyGradients(learningRate, batchSize);
         }
-
         return totalCost / inputData.Count;
     }
-
     public void ApplyGradients(float learningRate, int batchSize)
     {
         float lr = learningRate / batchSize;
@@ -475,7 +201,6 @@ public class NeuralNetwork
             layers[i].ApplyGradients(lr);
         }
     }
-
     public void ResetGradients()
     {
         for (int i = 0; i < layers.Length; i++)
@@ -483,16 +208,14 @@ public class NeuralNetwork
             layers[i].ResetGradients();
         }
     }
-
     public float CalculateGradients(float[] input, float[] expectedOutput) {
         float[] output = Evaluate(input);
         float cost = errorFunction(output, expectedOutput);
-
         for (int i = layers.Length - 1; i >= 0; i--)
         {
             if (i == layers.Length - 1)
             {
-                float[] outputGradients = errorDerivative(output, expectedOutput);
+                float[] outputGradients = MSEDerivative(output, expectedOutput);
                 float[] preActivationGradients = outputDerivative(layers[layers.Length - 1].preActivationOutput, outputGradients);
                 for (int j = 0; j < shape[i+1]; j++) {
                     layers[i].biasGradients[j] += preActivationGradients[j];
@@ -509,7 +232,6 @@ public class NeuralNetwork
                     }
                 }
             }
-
             else
             {
                 // Calculate pre+post activation gradients
@@ -527,7 +249,6 @@ public class NeuralNetwork
                     postActivationGradients[j] = accumulatedGradient;
                 }
                 float[] preActivationGradients = activationDerivative(layers[i].preActivationOutput, postActivationGradients);
-
                 for (int j = 0; j < shape[i+1]; j++)
                 {
                     layers[i].biasGradients[j] += preActivationGradients[j];
@@ -572,79 +293,6 @@ public class NeuralNetwork
         }
         */
         return cost;
-    }
-
-    public void SaveNetwork(string filePath, int startLayer = 0, int sharedLayerCount = 0)
-    {
-        var networkData = new List<LayerData>();
-
-        // Save all layers, marking which ones are shared
-        for (int i = 0; i < layers.Length; i++)
-        {
-            // Only save shared layers in the first network that contains them
-            if (i >= startLayer && (sharedLayerCount == 0 || i >= sharedLayerCount))
-            {
-                var layer = layers[i];
-                var layerData = new LayerData
-                {
-                    WeightsRows = layer.weights.GetLength(0),
-                    WeightsCols = layer.weights.GetLength(1),
-                    Weights = new float[layer.weights.Length],
-                    Biases = (float[])layer.biases.Clone()
-                };
-
-                // Flatten the 2D weights array
-                int index = 0;
-                for (int j = 0; j < layer.weights.GetLength(0); j++)
-                {
-                    for (int k = 0; k < layer.weights.GetLength(1); k++)
-                    {
-                        layerData.Weights[index++] = layer.weights[j, k];
-                    }
-                }
-
-                networkData.Add(layerData);
-            }
-        }
-
-        string json = JsonUtility.ToJson(new NetworkData { Layers = networkData.ToArray() }, true);
-        File.WriteAllText("/Users/leoschoolwork/Desktop/Personal/Projects/Coding/Unity/Connect Four/Assets/Data/" + filePath, json);
-    }
-
-    public void LoadNetwork(string filePath, int startLayer = 0, int sharedLayerCount = 0)
-    {
-        string json = File.ReadAllText("/Users/leoschoolwork/Desktop/Personal/Projects/Coding/Unity/Connect Four/Assets/Data/" + filePath);
-        NetworkData networkData = JsonUtility.FromJson<NetworkData>(json);
-
-        int dataIndex = 0;
-        for (int i = startLayer; i < layers.Length; i++)
-        {
-            // Skip shared layers when loading the second network
-            if (sharedLayerCount > 0 && i < sharedLayerCount && startLayer > 0)
-                continue;
-
-            if (dataIndex >= networkData.Layers.Length)
-                break;
-
-            var layerData = networkData.Layers[dataIndex++];
-
-            // Reconstruct the 2D weights array
-            layers[i].weights = new float[layerData.WeightsRows, layerData.WeightsCols];
-            int index = 0;
-            for (int j = 0; j < layerData.WeightsRows; j++)
-            {
-                for (int k = 0; k < layerData.WeightsCols; k++)
-                {
-                    layers[i].weights[j, k] = layerData.Weights[index++];
-                }
-            }
-
-            // Load biases
-            for (int j = 0; j < layerData.Biases.Length; j++)
-            {
-                layers[i].biases[j] = layerData.Biases[j];
-            }
-        }
     }
 
     public static float MSE(float[] outputs, float[] expectedOutputs)
@@ -805,6 +453,79 @@ public class NeuralNetwork
         for (int i = startFromLayer; i < layers.Length; i++)
         {
             layers[i].ApplyGradients(learningRate);
+        }
+    }
+
+    public void SaveNetwork(string path)
+    {
+        NetworkData data = new NetworkData();
+        data.Layers = new LayerData[layers.Length];
+        
+        for (int i = 0; i < layers.Length; i++)
+        {
+            LayerData layerData = new LayerData();
+            
+            // Convert 2D weights array to 1D
+            layerData.WeightsRows = layers[i].weights.GetLength(0);
+            layerData.WeightsCols = layers[i].weights.GetLength(1);
+            layerData.Weights = new float[layerData.WeightsRows * layerData.WeightsCols];
+            
+            for (int row = 0; row < layerData.WeightsRows; row++)
+            {
+                for (int col = 0; col < layerData.WeightsCols; col++)
+                {
+                    layerData.Weights[row * layerData.WeightsCols + col] = layers[i].weights[row, col];
+                }
+            }
+            
+            layerData.Biases = layers[i].biases;
+            data.Layers[i] = layerData;
+        }
+
+        string json = JsonUtility.ToJson(data);
+        File.WriteAllText(path, json);
+    }
+
+    public void LoadNetwork(string path)
+    {
+        if (!File.Exists(path))
+        {
+            Debug.LogError($"No save file found at {path}");
+            return;
+        }
+
+        string json = File.ReadAllText(path);
+        NetworkData data = JsonUtility.FromJson<NetworkData>(json);
+
+        if (data.Layers.Length != layers.Length)
+        {
+            Debug.LogError("Saved network architecture doesn't match current network architecture");
+            return;
+        }
+
+        for (int i = 0; i < layers.Length; i++)
+        {
+            LayerData layerData = data.Layers[i];
+            
+            // Verify dimensions match
+            if (layerData.WeightsRows != layers[i].weights.GetLength(0) || 
+                layerData.WeightsCols != layers[i].weights.GetLength(1))
+            {
+                Debug.LogError($"Layer {i} dimensions don't match saved data");
+                return;
+            }
+
+            // Convert 1D weights array back to 2D
+            for (int row = 0; row < layerData.WeightsRows; row++)
+            {
+                for (int col = 0; col < layerData.WeightsCols; col++)
+                {
+                    layers[i].weights[row, col] = layerData.Weights[row * layerData.WeightsCols + col];
+                }
+            }
+
+            // Copy biases
+            Array.Copy(layerData.Biases, layers[i].biases, layerData.Biases.Length);
         }
     }
 }

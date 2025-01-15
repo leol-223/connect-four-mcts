@@ -38,7 +38,7 @@ public class BoardTestB
         InitializeZobrist();
         int[] shape = new int[4] { 84, 20, 20, 3 };
         nn = new NeuralNetwork(shape, NeuralNetwork.Tanh, NeuralNetwork.Softmax, NeuralNetwork.TanhDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
-        nn.LoadNetwork("Connect-Depth4-Gen1");
+        // nn.LoadNetwork("Connect-Depth4-Gen1");
     }
     // 0, 1, 2, .., 5 = first column
     public void InitiateBoard()

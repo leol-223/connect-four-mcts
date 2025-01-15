@@ -21,10 +21,10 @@ public class GameManager : MonoBehaviour
     public float dropHeight;
     public string valuePath;
     public string policyPath;
-    public int[] sharedShape;
     public int[] valueShape;
     public int[] policyShape;
-    public SharedNeuralNetworks nn;
+    public NeuralNetwork valueNetwork;
+    public NeuralNetwork policyNetwork;
 
     private float minTokenDelay = 0.1f;
     private BoardNN board;
@@ -57,24 +57,14 @@ public class GameManager : MonoBehaviour
         board = new BoardNN();
         rootNode = null;
 
-        nn = new SharedNeuralNetworks(
-            sharedShape,
-            valueShape,
-            policyShape,
-            NeuralNetwork.ReLU,              // Shared activation
-            NeuralNetwork.Tanh,              // Value output activation
-            NeuralNetwork.Softmax,           // Policy output activation
-            NeuralNetwork.ReLUDerivative,    // Shared derivative
-            NeuralNetwork.TanhDerivative,    // Value output derivative
-            NeuralNetwork.SoftmaxDerivative, // Policy output derivative
-            NeuralNetwork.MSE,               // Value error function
-            NeuralNetwork.CategoricalCrossEntropy, // Policy error function
-            NeuralNetwork.MSEDerivative,     // Value error derivative
-            NeuralNetwork.CategoricalCrossEntropyDerivative // Policy error derivative
-        );
+        this.valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        this.policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
 
-        nn.LoadNetworks(valuePath, policyPath);
-        board.nn = nn;
+        this.valueNetwork.LoadNetwork(valuePath);
+        this.policyNetwork.LoadNetwork(policyPath);
+
+        board.valueNetwork = valueNetwork;
+        board.policyNetwork = policyNetwork;
     }
 
     // Update is called once per frame
@@ -430,7 +420,7 @@ public class GameManager : MonoBehaviour
     {
         float[] result = GetNeuralInput(redBitboard, yellowBitboard);
 
-        float[] evaluation = nn.GetPolicyPrediction(result);
+        float[] evaluation = policyNetwork.Evaluate(result);
         for (int i = 0; i < 7; i++)
         {
             Debug.Log("Column " + i + ": " + evaluation[i]);

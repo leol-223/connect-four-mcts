@@ -16,7 +16,7 @@ public class NNTest : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Sigmoid, NeuralNetwork.ReLUDerivative, NeuralNetwork.SigmoidDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
         // nn.LoadNetwork("test.json");
     }
 
@@ -40,10 +40,10 @@ public class NNTest : MonoBehaviour
                     float[] output;
                     if (inCircle)
                     {
-                        output = new float[] { 1 };
+                        output = new float[] { 1 , 0};
                     } else
                     {
-                        output = new float[] { 0 };
+                        output = new float[] { 0 , 1};
                     }
                     inputs.Add(input);
                     outputs.Add(output);

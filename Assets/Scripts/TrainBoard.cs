@@ -26,7 +26,8 @@ public class TreeNode {
     public float promise;
     public bool redToPlay;
     public bool isTerminal;
-    public SharedNeuralNetworks nn;
+    public NeuralNetwork valueNetwork;
+    public NeuralNetwork policyNetwork;
     public int visits;
     public int depth;
     public bool isRootNode;
@@ -40,8 +41,9 @@ public class TreeNode {
     // For demonstration, we’ll define a constant for exploration:
     private const float C_PUCT = 1.4f;
 
-    public TreeNode(SharedNeuralNetworks nn, State state) {
-        this.nn = nn;
+    public TreeNode(NeuralNetwork valueNetwork, NeuralNetwork policyNetwork, State state) {
+        this.valueNetwork = valueNetwork;
+        this.policyNetwork = policyNetwork;
         this.state = state;
         visits = 0;
         isRootNode = false;
@@ -51,13 +53,13 @@ public class TreeNode {
         List<int> possibleMoves = GetValidMoves();
         children = new List<TreeNode>();
 
-        float[] policy = nn.GetPolicyPrediction(StateToInput(state));
+        float[] policy = policyNetwork.Evaluate(StateToInput(state));
 
         for (int i = 0; i < possibleMoves.Count; i++)
         {
             int move = possibleMoves[i];
             State childState = MakeMove(move);
-            TreeNode child = new TreeNode(nn, childState);
+            TreeNode child = new TreeNode(valueNetwork, policyNetwork, childState);
             child.priorMove = move;
             child.redToPlay = !redToPlay;
             child.depth = depth + 1;
@@ -81,7 +83,7 @@ public class TreeNode {
             else
             {
                 float[] input = StateToInput(childState);
-                float nnValue = nn.GetValuePrediction(input)[0];
+                float nnValue = valueNetwork.Evaluate(input)[0];
                 child.eval = child.redToPlay ? -nnValue : nnValue;
             }
 
@@ -267,7 +269,7 @@ public class TreeNode {
             float value = 0f;
             if (!isTerminal) {
                 float[] input = StateToInput(state);
-                value = nn.GetValuePrediction(input)[0];
+                value = valueNetwork.Evaluate(input)[0];
                 value = redToPlay ? value : -value;
             }
             W += value;
@@ -319,10 +321,10 @@ public class TreeNode {
 public class TrainBoard : MonoBehaviour
 {
     // Start is called once before the first execution of Update after the MonoBehaviour is created
-    public int[] sharedShape;
     public int[] valueShape;
     public int[] policyShape;
-    public SharedNeuralNetworks nn;
+    public NeuralNetwork valueNetwork;
+    public NeuralNetwork policyNetwork;
     public int numGenerations;
     public int startGeneration;
     public int numGames;
@@ -334,8 +336,8 @@ public class TrainBoard : MonoBehaviour
     public TMPro.TMP_Text secondaryDisplay;
     public TMPro.TMP_Text generationText;
 
-    private List<float[]> inputData;
-    private List<float[]> outputData;
+    private List<float[]> valueInputs;
+    private List<float[]> valueOutputs;
     private List<float[]> policyInputs;
     private List<float[]> policyOutputs;
 
@@ -346,28 +348,17 @@ public class TrainBoard : MonoBehaviour
 
     void Start()
     {
-        nn = new SharedNeuralNetworks(
-            sharedShape,
-            valueShape,
-            policyShape,
-            NeuralNetwork.ReLU,              // Shared activation
-            NeuralNetwork.Tanh,              // Value output activation
-            NeuralNetwork.Softmax,           // Policy output activation
-            NeuralNetwork.ReLUDerivative,    // Shared derivative
-            NeuralNetwork.TanhDerivative,    // Value output derivative
-            NeuralNetwork.SoftmaxDerivative, // Policy output derivative
-            NeuralNetwork.MSE,               // Value error function
-            NeuralNetwork.CategoricalCrossEntropy, // Policy error function
-            NeuralNetwork.MSEDerivative,     // Value error derivative
-            NeuralNetwork.CategoricalCrossEntropyDerivative // Policy error derivative
-        );
+        valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+        policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
 
         generationCounter = startGeneration;
+        int numGamesDone = startGeneration * numGames;
         if (startGeneration > 0) {
-            nn.LoadNetworks(modelName+"-value", modelName+"-policy");
+            valueNetwork.LoadNetwork(modelName+"-value" + numGamesDone.ToString());
+            policyNetwork.LoadNetwork(modelName+"-policy" + numGamesDone.ToString());
         }
-        inputData = new List<float[]>();
-        outputData = new List<float[]>();
+        valueInputs = new List<float[]>();
+        valueOutputs = new List<float[]>();
 
         policyInputs = new List<float[]>();
         policyOutputs = new List<float[]>();
@@ -386,7 +377,8 @@ public class TrainBoard : MonoBehaviour
                 secondaryDisplay.text = "Epoch 0: -";
 
                 BoardNN board = new BoardNN();
-                board.nn = nn;
+                board.valueNetwork = valueNetwork;
+                board.policyNetwork = policyNetwork;
 
                 List<float[]> positions = new List<float[]>();
                 BoardNN.Player winningPlayer;
@@ -435,8 +427,8 @@ public class TrainBoard : MonoBehaviour
                 Debug.Log(output[0]);
                 for (int i = 0; i < positions.Count; i++)
                 {
-                    inputData.Add(positions[i]);
-                    outputData.Add(output);
+                    valueInputs.Add(positions[i]);
+                    valueOutputs.Add(output);
                 }
 
                 counter += 1;
@@ -448,16 +440,19 @@ public class TrainBoard : MonoBehaviour
             }
             else if (epochCounter < numEpochs)
             {
-                float cost = nn.TrainOneEpoch(inputData, outputData, policyOutputs, 0.01f, 64);
-
-                Debug.Log("Number of training samples: " + inputData.Count + " " + policyInputs.Count);
-                nn.SaveNetworks(modelName+"-value", modelName+"-policy");
+                float cost1 = valueNetwork.TrainOneEpoch(valueInputs, valueOutputs, 0.01f, 64);
+                float cost2 = policyNetwork.TrainOneEpoch(policyInputs, policyOutputs, 0.01f, 64);
+                // should be the same
+                Debug.Log("Number of training samples: " + valueInputs.Count + " " + policyInputs.Count);
                 epochCounter += 1;
-                secondaryDisplay.text = "Epoch: " + epochCounter.ToString() + " Cost: " + cost.ToString();
+                secondaryDisplay.text = "Epoch: " + epochCounter.ToString() + " Cost: " + cost1.ToString();
             }
             else
             {
                 generationCounter += 1;
+                int numGamesDone = generationCounter * numGames;
+                valueNetwork.SaveNetwork(modelName+"-value" + numGamesDone.ToString());
+                policyNetwork.SaveNetwork(modelName+"-policy" + numGamesDone.ToString());
                 epochCounter = 0;
                 counter = 0;
                 startTime = Time.realtimeSinceStartup;
@@ -514,7 +509,8 @@ public class BoardNN
     public int[] yellowHeights;
     public Dictionary<ulong, TTEntry> tt;
     public EvaluationFunction evaluationFunction;
-    public SharedNeuralNetworks nn;
+    public NeuralNetwork valueNetwork;
+    public NeuralNetwork policyNetwork;
 
     public float[] redPositionalVals = new float[7] { 0, 1, 2, 3, 2, 1, 0 };
     public float[] yellowPositionVals = new float[7] { 1, 0, 1.5f, 3.5f, 1.5f, 0, 1 };
@@ -568,7 +564,7 @@ public class BoardNN
 
     public TreeNode GetRootNode(bool isRed) {
         State state = new State(redBitboard, yellowBitboard, heights);
-        TreeNode rootNode = new TreeNode(nn, state);
+        TreeNode rootNode = new TreeNode(valueNetwork, policyNetwork, state);
         rootNode.redToPlay = isRed;
         rootNode.depth = 0;
         rootNode.isRootNode = true;
