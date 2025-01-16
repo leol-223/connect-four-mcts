@@ -1,9 +1,12 @@
 using System;
-using UnityEngine;
+using System.Threading;
 
 public static class NoiseUtils
 {
-    // Example Dirichlet sampler
+    private static readonly ThreadLocal<Random> random = 
+        new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref randomSeed)));
+    private static int randomSeed = Environment.TickCount;
+
     public static float[] SampleDirichlet(int dim, float alpha)
     {
         float[] gammas = new float[dim];
@@ -22,45 +25,39 @@ public static class NoiseUtils
         return gammas;
     }
 
-    // Marsaglia-Tsang method for Gamma(shape=k, scale=theta),
-    // but adapted to alpha >= 1. 
-    // If alpha < 1, we do a common trick: gamma(alpha,1) = gamma(alpha+1,1) * U^(1/alpha), see below.
     public static float SampleGamma(float alpha, float scale)
     {
         if (alpha < 1)
         {
-            // Trick: gamma(alpha, 1) = gamma(alpha+1, 1) * U^(1/alpha)
-            float u = UnityEngine.Random.value; // uniform(0,1)
-            return SampleGamma(alpha + 1f, 1f) * Mathf.Pow(u, 1f / alpha);
+            float u = (float)random.Value.NextDouble();
+            return SampleGamma(alpha + 1f, 1f) * (float)Math.Pow(u, 1f / alpha);
         }
 
-        // Now alpha >= 1
         float d = alpha - 1f / 3f;
-        float c = 1f / Mathf.Sqrt(9f * d);
+        float c = 1f / (float)Math.Sqrt(9f * d);
 
         while (true)
         {
-            float x = RandomNormal(0f, 1f); // standard normal
+            float x = RandomNormal(0f, 1f);
             float v = 1f + c * x;
             if (v <= 0) continue;
 
             v = v * v * v;
-            float u = UnityEngine.Random.value;
-            // Squeeze
+            float u = (float)random.Value.NextDouble();
+            
             if (u < 1f - 0.0331f * x * x * x * x)
                 return scale * d * v;
-            if (Mathf.Log(u) < 0.5f * x * x + d * (1f - v + Mathf.Log(v)))
+            if (Math.Log(u) < 0.5f * x * x + d * (1f - v + Math.Log(v)))
                 return scale * d * v;
         }
     }
 
-    // Box-Muller to sample from standard normal(0,1)
     public static float RandomNormal(float mean, float std)
     {
-        float u1 = 1f - UnityEngine.Random.value; // avoid 0
-        float u2 = 1f - UnityEngine.Random.value;
-        float randStdNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) *
-                              Mathf.Sin(2.0f * Mathf.PI * u2);
+        float u1 = 1f - (float)random.Value.NextDouble();
+        float u2 = 1f - (float)random.Value.NextDouble();
+        float randStdNormal = (float)(Math.Sqrt(-2.0 * Math.Log(u1)) *
+                              Math.Sin(2.0 * Math.PI * u2));
         return mean + std * randStdNormal;
     }
 }

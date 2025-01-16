@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
+using System;
 
 public class NNTest : MonoBehaviour
 {
@@ -16,48 +17,66 @@ public class NNTest : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
-        // nn.LoadNetwork("test.json");
+        try {
+            Debug.Log("Starting NNTest initialization...");
+            Debug.Log($"Network shape: {string.Join(", ", shape)}");
+            
+            nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, 
+                NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, 
+                NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+            
+            Debug.Log("Neural network initialized successfully");
+        }
+        catch (Exception e) {
+            Debug.LogError($"Error in Start: {e.Message}\n{e.StackTrace}");
+        }
     }
 
     // Update is called once per frame
     void Update()
     {
-        if (counter < maxIterations)
-        {
-            for (int i = 0; i < numIterationsPerUpdate; i++)
-            {
-                List<float[]> inputs = new List<float[]>();
-                List<float[]> outputs = new List<float[]>();
-
-                for (int j = 0; j < 128; j++)
-                {
-                    float x = Random.Range(-1f, 1f);
-                    float y = Random.Range(-1f, 1f);
-                    bool inCircle = (x * x + y * y <= 1);
-
-                    float[] input = new float[] { x, y };
-                    float[] output;
-                    if (inCircle)
-                    {
-                        output = new float[] { 1 , 0, 0};
-                    } else
-                    {
-                        output = new float[] { 0, 1, 0};
-                    }
-                    inputs.Add(input);
-                    outputs.Add(output);
-                }
-
-                float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 15);
-                text.text = "Cost: " + avgCost.ToString();
-
-                counter += 1;
+        try {
+            if (nn == null) {
+                Debug.LogError("Neural network is null!");
+                return;
             }
-        } else if (!isSaved)
-        {
-            nn.SaveNetwork("test.json");
-            isSaved = true;
+
+            if (counter < maxIterations)
+            {
+                for (int i = 0; i < numIterationsPerUpdate; i++)
+                {
+                    List<float[]> inputs = new List<float[]>();
+                    List<float[]> outputs = new List<float[]>();
+
+                    // Generate training data
+                    for (int j = 0; j < 128; j++)
+                    {
+                        float x = UnityEngine.Random.Range(-1f, 1f);
+                        float y = UnityEngine.Random.Range(-1f, 1f);
+                        bool inCircle = (x * x + y * y <= 1);
+
+                        inputs.Add(new float[] { x, y });
+                        outputs.Add(inCircle ? new float[] { 1, 0, 0 } : new float[] { 0, 1, 0 });
+                    }
+
+                    float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 15);
+                    if (text != null) {
+                        text.text = "Cost: " + avgCost.ToString();
+                    }
+
+                    counter += 1;
+                }
+            }
+            else if (!isSaved)
+            {
+                nn.SaveNetwork("test.json");
+                isSaved = true;
+                Debug.Log("Network saved successfully");
+            }
+        }
+        catch (Exception e) {
+            Debug.LogError($"Error in Update: {e.Message}\n{e.StackTrace}");
+            enabled = false; // Stop the Update loop if we hit an error
         }
     }
 }

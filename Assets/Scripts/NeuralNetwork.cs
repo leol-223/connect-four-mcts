@@ -174,26 +174,12 @@ public class NeuralNetwork
         return runningOutput;
     }
     public float TrainOneEpoch(List<float[]> inputData, List<float[]> outputData, float learningRate, int batchSize) {
-        // Create indices array and shuffle it
-        int[] indices = new int[inputData.Count];
-        for (int i = 0; i < indices.Length; i++) {
-            indices[i] = i;
-        }
-        // Fisher-Yates shuffle
-        for (int i = indices.Length - 1; i > 0; i--) {
-            int j = UnityEngine.Random.Range(0, i + 1);
-            int temp = indices[i];
-            indices[i] = indices[j];
-            indices[j] = temp;
-        }
-
         float totalCost = 0f;
         int batchCount = 0;
-        for (int i = 0; i < inputData.Count; i++) {
-            // Use shuffled index to access data
-            int idx = indices[i];
-            float[] input = inputData[idx];
-            float[] output = outputData[idx];
+        for (int i = 0; i < inputData.Count; i++)
+        {
+            float[] input = inputData[i];
+            float[] output = outputData[i];
             totalCost += CalculateGradients(input, output);
             batchCount += 1;
             if (batchCount >= batchSize)

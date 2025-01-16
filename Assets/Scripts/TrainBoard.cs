@@ -1,6 +1,9 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Linq;
 
 public delegate float EvaluationFunction(ulong redBitboard, ulong yellowBitboard);
 
@@ -40,6 +43,30 @@ public class TreeNode {
 
     // For demonstration, we’ll define a constant for exploration:
     private const float C_PUCT = 1.4f;
+
+    // Add lock object for thread safety
+    private readonly object lockObject = new object();
+
+    // Add a thread-safe random number generator
+    private static readonly ThreadLocal<System.Random> random = 
+        new ThreadLocal<System.Random>(() => new System.Random(Interlocked.Increment(ref randomSeed)));
+    private static int randomSeed = Environment.TickCount;
+
+    // Replace UnityEngine.Random.Range with this method
+    private float RandomRange(float min, float max) {
+        return (float)(random.Value.NextDouble() * (max - min) + min);
+    }
+
+    public static float GenerateRandomNormal(float mean, float standardDeviation)
+    {
+        // Box-Muller transform with thread-safe random
+        float u1 = (float)random.Value.NextDouble(); // Uniform(0,1] random doubles
+        float u2 = (float)random.Value.NextDouble();
+        float standardNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Sin(2.0f * Mathf.PI * u2);
+
+        // Scale and shift to match the specified mean and standard deviation
+        return mean + standardDeviation * standardNormal;
+    }
 
     public TreeNode(NeuralNetwork valueNetwork, NeuralNetwork policyNetwork, State state) {
         this.valueNetwork = valueNetwork;
@@ -234,74 +261,72 @@ public class TreeNode {
 
     public float Search()
     {
-        if (isTerminal)
-        {
-            // For terminal nodes, we should still count the visit and update Q
-            N += 1;
-            W += (float)eval;
-            Q = W / N;
-            return (float)eval;
+        if (isTerminal) {
+            lock(lockObject) {
+                N += 1;
+                W += (float)eval;
+                Q = W / N;
+                return (float)eval;
+            }
         }
 
-        if (children == null)
-        {
-            if (isRootNode)
-            {
-                CreateChildrenWithRootNoise(0.3f, 0.25f);
-            }
-            else
-            {
-                CreateChildren(1.0f);
-            }
+        if (children == null) {
+            lock(lockObject) {
+                // Double-check locking pattern
+                if (children == null) {
+                    if (isRootNode) {
+                        CreateChildrenWithRootNoise(0.3f, 0.25f);
+                    } else {
+                        CreateChildren(1.0f);
+                    }
 
-            // For newly expanded nodes, check if any children are terminal
-            foreach (var child in children)
-            {
-                if (child.isTerminal)
-                {
-                    // Initialize terminal nodes with one visit
-                    child.N = 1;
-                    child.W = (float)child.eval;
-                    child.Q = child.W / child.N;
+                    foreach (var child in children) {
+                        if (child.isTerminal) {
+                            child.N = 1;
+                            child.W = (float)child.eval;
+                            child.Q = child.W / child.N;
+                        }
+                    }
+
+                    float value = 0f;
+                    if (!isTerminal) {
+                        float[] input = StateToInput(state);
+                        value = valueNetwork.Evaluate(input)[0];
+                        value = redToPlay ? value : -value;
+                    }
+                    W += value;
+                    N += 1;
+                    Q = W / N;
+                    return value;
                 }
             }
-
-            float value = 0f;
-            if (!isTerminal) {
-                float[] input = StateToInput(state);
-                value = valueNetwork.Evaluate(input)[0];
-                value = redToPlay ? value : -value;
-            }
-            W += value;
-            N += 1;
-            Q = W / N;
-            return value;
         }
 
-        float totalVisits = 0;
-        foreach (var c in children)
-        {
-            totalVisits += c.N;
+        float totalVisits;
+        lock(lockObject) {
+            totalVisits = children.Sum(c => c.N);
         }
 
         TreeNode bestChild = null;
         float bestScore = float.NegativeInfinity;
 
-        foreach (var c in children)
-        {
+        foreach (var c in children) {
             float uct;
-            if (c.N == 0)
-            {
-                // For unvisited nodes, use their terminal value if available
-                uct = c.isTerminal ? ((float)c.eval) : (C_PUCT * c.prior * Mathf.Sqrt(totalVisits + 1));
+            float childN, childQ, childPrior;
+            
+            lock(c.lockObject) {
+                childN = c.N;
+                childQ = c.Q;
+                childPrior = c.prior;
             }
-            else
-            {
-                uct = c.Q + C_PUCT * c.prior * Mathf.Sqrt(totalVisits + 1) / (1 + c.N);
+
+            if (childN == 0) {
+                uct = c.isTerminal ? ((float)c.eval) : (C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1));
+            } else {
+                uct = childQ + C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1) / (1 + childN);
             }
             
-            if (uct > bestScore)
-            {
+            if (uct > bestScore) {
                 bestScore = uct;
                 bestChild = c;
             }
@@ -309,9 +334,11 @@ public class TreeNode {
 
         float childValue = -bestChild.Search();
 
-        W += childValue;
-        N += 1;
-        Q = W / N;
+        lock(lockObject) {
+            W += childValue;
+            N += 1;
+            Q = W / N;
+        }
 
         return childValue;
     }
@@ -346,6 +373,8 @@ public class TrainBoard : MonoBehaviour
     private int generationCounter = 0;
     private float startTime;
 
+    // Add configuration for parallelization
+
     void Start()
     {
         valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
@@ -357,6 +386,7 @@ public class TrainBoard : MonoBehaviour
             valueNetwork.LoadNetwork(modelName+"-value" + numGamesDone.ToString());
             policyNetwork.LoadNetwork(modelName+"-policy" + numGamesDone.ToString());
         }
+
         valueInputs = new List<float[]>();
         valueOutputs = new List<float[]>();
 
@@ -526,23 +556,16 @@ public class BoardNN
     public float maxDepth;
     public float[] promise;
 
+    private readonly ParallelOptions parallelOptions = new ParallelOptions {
+        MaxDegreeOfParallelism = System.Environment.ProcessorCount // Use all available cores
+    };
+
     public BoardNN()
     {
         heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
         promise = new float[7];
         InitiateBoard();
         InitializeZobrist();
-    }
-
-    public static float GenerateRandomNormal(float mean, float standardDeviation)
-    {
-        // Box-Muller transform
-        float u1 = UnityEngine.Random.Range(0f, 1f); // Uniform(0,1] random doubles
-        float u2 = UnityEngine.Random.Range(0f, 1f);
-        float standardNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Sin(2.0f * Mathf.PI * u2);
-
-        // Scale and shift to match the specified mean and standard deviation
-        return mean + standardDeviation * standardNormal;
     }
 
     // 0, 1, 2, .., 5 = first column
@@ -600,169 +623,47 @@ public class BoardNN
     public MoveEval TreeSearch(int iterations, bool isRed)
     {
         TreeNode rootNode = GetRootNode(isRed);
+        
+        // Create a counter for progress tracking
+        int completedIterations = 0;
 
-        // Run MCTS for the desired number of iterations:
-        for (int i = 0; i < iterations; i++)
-        {
-            rootNode.Search();
+        try {
+            Parallel.For(0, iterations, parallelOptions, i => {
+                rootNode.Search();
+                Interlocked.Increment(ref completedIterations);
+            });
+        }
+        catch (AggregateException ae) {
+            Debug.LogError($"Parallel search failed: {ae.Message}");
+            foreach (var e in ae.InnerExceptions) {
+                Debug.LogError($"Inner exception: {e.Message}");
+            }
         }
 
-        // After MCTS finishes, pick the child with the highest visit count or best Q:
+        maxDepth = rootNode.GetMaxDepth();
+
+        // Calculate promises (visit counts)
         TreeNode bestChild = null;
         float bestVisits = -1f;
         int totalVisits = 0;
     
-        foreach (var child in rootNode.children)
-        {
-            // child.n should be an int but whatever
+        foreach (var child in rootNode.children) {
             totalVisits += (int)child.N;
             promise[child.priorMove] = (float)child.N;
-            if (child.N > bestVisits)
-            {
+            if (child.N > bestVisits) {
                 bestVisits = child.N;
                 bestChild = child;
             }
         }
+
+        // Normalize promises
         for (int i = 0; i < 7; i++) {
             promise[i] /= (float)totalVisits;
         }
 
-        maxDepth = rootNode.GetMaxDepth();
-        // Return the best child’s column and Q as the chosen move:
         int bestMove = (bestChild != null) ? bestChild.priorMove : -1;
         float bestEval = (bestChild != null) ? bestChild.Q : 0;
         return new MoveEval(bestMove, bestEval);
-    }
-
-
-    public MoveEval Minimax(int depth, float alpha, float beta, bool isRed, int exploreFirst, float temperature)
-    {
-        nodes += 1;
-        float alphaOriginal = alpha;
-        Player winningPlayer = GetWinningPlayer();
-
-        if (tt.TryGetValue(zobristHash, out TTEntry entry))
-        {
-            // Check if the stored depth is sufficient
-            if (entry.Depth >= depth)
-            {
-                // Use node-type logic to adjust alpha/beta or just return
-                switch (entry.Type)
-                {
-                    case NodeType.EXACT:
-                        // It's an exact value for this depth
-                        return new MoveEval(entry.BestMove, entry.Value);
-
-                    case NodeType.LOWERBOUND:
-                        // This value is a lower bound => effectively alpha = max(alpha, storedValue)
-                        if (entry.Value > alpha) alpha = entry.Value;
-                        break;
-
-                    case NodeType.UPPERBOUND:
-                        // This value is an upper bound => effectively beta = min(beta, storedValue)
-                        if (entry.Value < beta) beta = entry.Value;
-                        break;
-                }
-
-                // Alpha-beta cutoff check
-                if (alpha >= beta)
-                {
-                    // We can prune here
-                    return new MoveEval(entry.BestMove, entry.Value);
-                }
-            }
-        }
-
-        // Terminal nodes
-        if (winningPlayer != Player.None)
-        {
-            if (winningPlayer == Player.Red)
-            {
-                float finalEval = (1000000 + depth) + UnityEngine.Random.Range(-0.01f, 0.01f);
-                MoveEval bestMove = new MoveEval(-1, finalEval);
-
-                // Store in TT
-                StoreTT(finalEval, -1, depth, alphaOriginal, beta);
-                // Higher depth means the win was reached earlier
-                return bestMove;
-            }
-            else
-            {
-                float finalEval = -(1000000 + depth) + UnityEngine.Random.Range(-0.01f, 0.01f);
-                MoveEval bestMove = new MoveEval(-1, finalEval);
-
-                // Store in TT
-                StoreTT(finalEval, -1, depth, alphaOriginal, beta);
-                return bestMove;
-            }
-        }
-        if (IsFull())
-        {
-            float finalEvaluation = UnityEngine.Random.Range(-0.01f, 0.01f);
-            MoveEval bestMove = new MoveEval(-1, finalEvaluation);
-            StoreTT(finalEvaluation, -1, depth, alphaOriginal, beta);
-            return bestMove;
-        }
-        if (depth == 0)
-        {
-            // Heruistic
-            float eval = HeuristicEvaluation() + GenerateRandomNormal(0, temperature);
-            MoveEval bestMove = new MoveEval(-1, eval);
-            StoreTT(eval, -1, depth, alphaOriginal, beta);
-            return bestMove;
-        }
-
-        float bestValue = isRed ? Mathf.NegativeInfinity : Mathf.Infinity;
-        int bestMove2 = 0;
-        List<int> validMoves = GetValidMoves();
-        List<int> moves = SortedMoves(validMoves, exploreFirst);
-
-        if (isRed)
-        {
-            for (int i = 0; i < moves.Count; i++)
-            {
-                int column = moves[i];
-                MakeMove(column, Player.Red);
-                float eval = Minimax(depth - 1, alpha, beta, false, -1, temperature).Eval;
-                if (eval > bestValue)
-                {
-                    bestValue = eval;
-                    bestMove2 = column;
-                }
-                UnmakeMove(column, Player.Red);
-
-                alpha = Mathf.Max(alpha, eval);
-                if (alpha >= beta)
-                {
-                    break;
-                }
-            }
-        }
-        else
-        {
-            for (int i = 0; i < moves.Count; i++)
-            {
-                int column = moves[i];
-                MakeMove(column, Player.Yellow);
-                float eval = Minimax(depth - 1, alpha, beta, true, -1, temperature).Eval;
-                if (eval < bestValue)
-                {
-                    bestMove2 = column;
-                    bestValue = eval;
-                }
-                UnmakeMove(column, Player.Yellow);
-                beta = Mathf.Min(beta, eval);
-                if (beta <= alpha)
-                {
-                    break;
-                }
-            }
-        }
-
-        MoveEval bestME = new MoveEval(bestMove2, bestValue);
-        StoreTT(bestValue, bestMove2, depth, alphaOriginal, beta);
-
-        return bestME;
     }
 
     public void InitializeZobrist()

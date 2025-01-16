@@ -799,7 +799,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   shape: 020000000a0000000a00000003000000
-  learningRate: 0.01
+  learningRate: 0.05
   text: {fileID: 687380570}
   numIterationsPerUpdate: 200
   maxIterations: 10000
@@ -832,8 +832,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   valueShape: 54000000140000000500000001000000
   policyShape: 54000000140000001400000007000000
-  numGenerations: 1
-  startGeneration: 0
+  numGenerations: 5
+  startGeneration: 2
   numGames: 6400
   numEpochs: 10
   iterations: 800
