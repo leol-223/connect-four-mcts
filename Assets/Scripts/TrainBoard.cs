@@ -407,8 +407,9 @@ public class TrainBoard : MonoBehaviour
                         board.MakeMove(bestMove.Move, currentPlayer);
                         currentPlayer = BoardNN.Player.Red;
                     }
-
-                    policyOutputs.Add(board.promise);
+                    float[] promise = new float[7];
+                    Array.Copy(board.promise, promise, 7);
+                    policyOutputs.Add(promise);
                 }
 
                 float[] output;
@@ -441,6 +442,11 @@ public class TrainBoard : MonoBehaviour
             else if (epochCounter < numEpochs)
             {
                 float cost1 = valueNetwork.TrainOneEpoch(valueInputs, valueOutputs, 0.01f, 64);
+                Debug.Log("Training data sizes - Value: " + valueInputs.Count + ", Policy: " + policyInputs.Count);
+                Debug.Log("Policy Input Sample: " + string.Join(", ", policyInputs[0]));
+                Debug.Log("Policy Output Sample: " + string.Join(", ", policyOutputs[0]));
+                Debug.Log("Policy Input Sample: " + string.Join(", ", policyInputs[0]));
+                Debug.Log("Policy Output Sample: " + string.Join(", ", policyOutputs[0]));
                 float cost2 = policyNetwork.TrainOneEpoch(policyInputs, policyOutputs, 0.01f, 64);
                 // should be the same
                 Debug.Log("Number of training samples: " + valueInputs.Count + " " + policyInputs.Count);
@@ -617,7 +623,7 @@ public class BoardNN
                 bestChild = child;
             }
         }
-        for (int i = 0; i < promise.Length; i++) {
+        for (int i = 0; i < 7; i++) {
             promise[i] /= (float)totalVisits;
         }
 

@@ -798,7 +798,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8a99cefb478e04c72bfc7e25e936eefd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  shape: 020000000a0000000a00000002000000
+  shape: 020000000a0000000a00000003000000
   learningRate: 0.01
   text: {fileID: 687380570}
   numIterationsPerUpdate: 200
@@ -832,12 +832,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   valueShape: 54000000140000000500000001000000
   policyShape: 54000000140000001400000007000000
-  numGenerations: 100
+  numGenerations: 1
   startGeneration: 0
-  numGames: 8
-  numEpochs: 5
+  numGames: 6400
+  numEpochs: 10
   iterations: 800
-  modelName: Nova2
+  modelName: Nova
   gamesDisplay: {fileID: 687380570}
   secondaryDisplay: {fileID: 893634495}
   generationText: {fileID: 935622201}

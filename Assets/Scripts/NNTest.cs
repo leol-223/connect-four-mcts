@@ -40,10 +40,10 @@ public class NNTest : MonoBehaviour
                     float[] output;
                     if (inCircle)
                     {
-                        output = new float[] { 1 , 0};
+                        output = new float[] { 1 , 0, 0};
                     } else
                     {
-                        output = new float[] { 0 , 1};
+                        output = new float[] { 0, 1, 0};
                     }
                     inputs.Add(input);
                     outputs.Add(output);
@@ -56,7 +56,7 @@ public class NNTest : MonoBehaviour
             }
         } else if (!isSaved)
         {
-            // nn.SaveNetwork("test.json");
+            nn.SaveNetwork("test.json");
             isSaved = true;
         }
     }
