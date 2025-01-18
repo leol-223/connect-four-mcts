@@ -41,6 +41,20 @@ public class Layer {
     public float[,] weightGradients;
     public float[] biasGradients;
 
+    private static System.Random random = new System.Random();
+    
+    private static float RandomNormal(float mean = 0.0f, float stdDev = 1.0f) {
+        float u1, u2;
+        do {
+            u1 = (float)random.NextDouble();
+        } while (u1 == 0);
+        u2 = (float)random.NextDouble();
+        
+        // Box-Muller transform to convert uniform to normal distribution
+        float randStandard = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Sin(2.0f * Mathf.PI * u2);
+        return mean + stdDev * randStandard;
+    }
+
     public Layer(int numInputs, int numOutputs, ActivationFunction activationFunction) {
         this.numInputs = numInputs;
         this.numOutputs = numOutputs;
@@ -51,13 +65,22 @@ public class Layer {
         biasGradients = new float[numOutputs];
         preActivationOutput = new float[numOutputs];
         postActivationOutput = new float[numOutputs];
-        // Xavier initialization
-        float initializationRange = 1 / Mathf.Sqrt(numInputs);
+
+        // Weight initialization based on activation function
+        float stdDev;
+        if (activationFunction == NeuralNetwork.ReLU) {
+            // He initialization
+            stdDev = Mathf.Sqrt(2.0f / numInputs);
+        } else {
+            // Xavier initialization for Sigmoid/Tanh
+            stdDev = Mathf.Sqrt(2.0f / (numInputs + numOutputs));
+        }
+
         for (int i = 0; i < numOutputs; i++) {
-            biases[i] = 0;
+            biases[i] = 0;  // Initialize biases to 0
             biasGradients[i] = 0;
             for (int j = 0; j < numInputs; j++) {
-                weights[i, j] = UnityEngine.Random.Range(-initializationRange, initializationRange);
+                weights[i, j] = RandomNormal(0, stdDev);
                 weightGradients[i, j] = 0;
             }
         }
@@ -173,25 +196,55 @@ public class NeuralNetwork
         }
         return runningOutput;
     }
-    public float TrainOneEpoch(List<float[]> inputData, List<float[]> outputData, float learningRate, int batchSize) {
+    public float TrainOneEpoch(List<float[]> inputData, List<float[]> outputData, float learningRate, int batchSize, bool shuffle = true) {
         float totalCost = 0f;
         int batchCount = 0;
+        
+        // Create index array for shuffling
+        int[] indices = Enumerable.Range(0, inputData.Count).ToArray();
+        if (shuffle) {
+            // Fisher-Yates shuffle
+            for (int i = indices.Length - 1; i > 0; i--) {
+                int j = UnityEngine.Random.Range(0, i + 1);
+                int temp = indices[i];
+                indices[i] = indices[j];
+                indices[j] = temp;
+            }
+        }
+
+        // Use shuffled indices to access data
+        for (int i = 0; i < inputData.Count; i++) {
+            int idx = indices[i];
+            float[] input = inputData[idx];
+            float[] output = outputData[idx];
+            totalCost += CalculateGradients(input, output);
+            batchCount += 1;
+            if (batchCount >= batchSize) {
+                ApplyGradients(learningRate, batchSize);
+                batchCount = 0;
+            }
+        }
+        
+        // Handle remaining samples in last batch
+        if (batchCount > 0) {
+            ApplyGradients(learningRate, batchCount);  // Use actual batch count for last batch
+        }
+        
+        return totalCost / inputData.Count;
+    }
+
+    public float CalculateCost(List<float[]> inputData, List<float[]> outputData) {
+        float totalCost = 0f;
         for (int i = 0; i < inputData.Count; i++)
         {
             float[] input = inputData[i];
-            float[] output = outputData[i];
-            totalCost += CalculateGradients(input, output);
-            batchCount += 1;
-            if (batchCount >= batchSize)
-            {
-                ApplyGradients(learningRate, batchSize);
-            }
-        }
-        if (batchCount > 0) {
-            ApplyGradients(learningRate, batchSize);
+            float[] expectedOutput = outputData[i];
+            float[] output = Evaluate(input);
+            totalCost += errorFunction(output, expectedOutput);
         }
         return totalCost / inputData.Count;
     }
+
     public void ApplyGradients(float learningRate, int batchSize)
     {
         float lr = learningRate / batchSize;
@@ -265,31 +318,6 @@ public class NeuralNetwork
                 }
             }
         }
-        /*
-        float h = 0.0001f;
-        for (int i = 0; i < layers.Length; i++)
-        {
-            for (int j = 0; j < shape[i + 1]; j++)
-            {
-                layers[i].biases[j] += h;
-                float[] newOutput = Evaluate(input);
-                float newCost = CalculateCost(newOutput, expectedOutput);
-                float gradient = (newCost - cost) / h;
-                layers[i].biasGradients[j] += gradient;
-                layers[i].biases[j] -= h;
-                
-                for (int k = 0; k < shape[i]; k++)
-                {
-                    layers[i].weights[j, k] += h;
-                    float[] newOutput2 = Evaluate(input);
-                    float newCost2 = CalculateCost(newOutput2, expectedOutput);
-                    float gradient2 = (newCost2 - cost) / h;
-                    layers[i].weightGradients[j, k] += gradient2;
-                    layers[i].weights[j, k] -= h;
-                }
-            }
-        }
-        */
         return cost;
     }
 

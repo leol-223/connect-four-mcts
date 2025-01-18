@@ -5,346 +5,6 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
 
-public delegate float EvaluationFunction(ulong redBitboard, ulong yellowBitboard);
-
-public struct State
-{
-    public ulong redBitboard;
-    public ulong yellowBitboard;
-    public int[] heights;
-
-    public State(ulong redBitboard, ulong yellowBitboard, int[] heights)
-    {
-        this.redBitboard = redBitboard;
-        this.yellowBitboard = yellowBitboard;
-        this.heights = heights;
-    }
-}
-
-public class TreeNode {
-    public List<TreeNode> children;
-    public int priorMove;
-    public State state;
-    public float? eval;
-    public float promise;
-    public bool redToPlay;
-    public bool isTerminal;
-    public NeuralNetwork valueNetwork;
-    public NeuralNetwork policyNetwork;
-    public int visits;
-    public int depth;
-    public bool isRootNode;
-
-    // MCTS-related:
-    public float N;     // visit count
-    public float W;     // total (accumulated) value
-    public float Q;     // average value = W / N
-    public float prior; // policy prior (from NN or heuristic)
-
-    // For demonstration, we’ll define a constant for exploration:
-    private const float C_PUCT = 1.4f;
-
-    // Add lock object for thread safety
-    private readonly object lockObject = new object();
-
-    // Add a thread-safe random number generator
-    private static readonly ThreadLocal<System.Random> random = 
-        new ThreadLocal<System.Random>(() => new System.Random(Interlocked.Increment(ref randomSeed)));
-    private static int randomSeed = Environment.TickCount;
-
-    // Replace UnityEngine.Random.Range with this method
-    private float RandomRange(float min, float max) {
-        return (float)(random.Value.NextDouble() * (max - min) + min);
-    }
-
-    public static float GenerateRandomNormal(float mean, float standardDeviation)
-    {
-        // Box-Muller transform with thread-safe random
-        float u1 = (float)random.Value.NextDouble(); // Uniform(0,1] random doubles
-        float u2 = (float)random.Value.NextDouble();
-        float standardNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Sin(2.0f * Mathf.PI * u2);
-
-        // Scale and shift to match the specified mean and standard deviation
-        return mean + standardDeviation * standardNormal;
-    }
-
-    public TreeNode(NeuralNetwork valueNetwork, NeuralNetwork policyNetwork, State state) {
-        this.valueNetwork = valueNetwork;
-        this.policyNetwork = policyNetwork;
-        this.state = state;
-        visits = 0;
-        isRootNode = false;
-    }
-
-    public void CreateChildren(float temperature) {
-        List<int> possibleMoves = GetValidMoves();
-        children = new List<TreeNode>();
-
-        float[] policy = policyNetwork.Evaluate(StateToInput(state));
-
-        for (int i = 0; i < possibleMoves.Count; i++)
-        {
-            int move = possibleMoves[i];
-            State childState = MakeMove(move);
-            TreeNode child = new TreeNode(valueNetwork, policyNetwork, childState);
-            child.priorMove = move;
-            child.redToPlay = !redToPlay;
-            child.depth = depth + 1;
-
-            // Check terminal states
-            if (HasConnectFour(childState.redBitboard))
-            {
-                child.isTerminal = true;
-                child.eval = child.redToPlay ? -(100f + child.depth * 0.01f) : 100f + child.depth * 0.01f;
-            }
-            else if (HasConnectFour(childState.yellowBitboard))
-            {
-                child.isTerminal = true;
-                child.eval = child.redToPlay ? 100f + child.depth * 0.01f : -(100f + child.depth * 0.01f);
-            }
-            else if (IsFull(childState))
-            {
-                child.isTerminal = true;
-                child.eval = 0f;
-            }
-            else
-            {
-                float[] input = StateToInput(childState);
-                float nnValue = valueNetwork.Evaluate(input)[0];
-                child.eval = child.redToPlay ? -nnValue : nnValue;
-            }
-
-            child.prior = policy[i];
-            children.Add(child);
-        }
-    }
-
-
-    public List<int> GetValidMoves()
-    {
-        List<int> moves = new List<int>();
-        for (int i = 0; i < 7; i++)
-        {
-            if (state.heights[i] < 6)
-            {
-                moves.Add(i);
-            }
-        }
-        return moves;
-    }
-
-    public State MakeMove(int column)
-    {
-        // First 6 = column 1 (row 1-6)
-        // Next 6 = column 2 (row 1-6)
-        // etc
-        int[] newHeights = new int[7];
-        Array.Copy(state.heights, newHeights, 7);
-
-        State newState = new State(state.redBitboard, state.yellowBitboard, newHeights);
-        int bitPosition = 8 * column + state.heights[column];
-        if (redToPlay)
-        {
-            newState.redBitboard |= ((ulong)1 << bitPosition);
-        }
-        else
-        {
-            newState.yellowBitboard |= ((ulong)1 << bitPosition);
-        }
-        newState.heights[column] += 1;
-        return newState;
-    }
-
-    public float[] StateToInput(State state) {
-        bool[] bits = new bool[128];
-
-        for (int i = 0; i < 64; i++)
-        {
-            bits[i] = (state.redBitboard & (1UL << i)) != 0;
-            bits[64 + i] = (state.yellowBitboard & (1UL << i)) != 0;
-        }
-
-        // Create the output array for 84 floats
-        float[] result = new float[84];
-
-        // Copy every 6 bits, skipping 2 buffer bits after every 6 bits
-        int resultIndex = 0;
-        for (int i = 0; i < bits.Length; i += 8)
-        {
-            for (int j = 0; j < 6; j++) // Copy 6 bits as floats
-            {
-                if (resultIndex < 84)
-                {
-                    result[resultIndex++] = bits[i + j] ? 1.0f : 0.0f;
-                }
-            }
-            // Skip the 2 buffer bits
-        }
-
-        return result;
-    }
-
-    private bool HasConnectFour(ulong b)
-    {
-        // 1) Vertical check (shift by 1)
-        {
-            ulong m = b & (b >> 1);
-            // If we can still find 2 more consecutive after that, there is a 4.
-            if ((m & (m >> 2)) != 0UL)
-                return true;
-        }
-
-        // 2) Horizontal check (shift by 6)
-        {
-            ulong m = b & (b >> 8);
-            if ((m & (m >> 16)) != 0UL)
-                return true;
-        }
-
-        // 3) Diagonal up-right (shift by 7)
-        {
-            ulong m = b & (b >> 9);
-            if ((m & (m >> 18)) != 0UL)
-                return true;
-        }
-
-        // 4) Diagonal up-left (shift by 5)
-        {
-            ulong m = b & (b >> 7);
-            if ((m & (m >> 14)) != 0UL)
-                return true;
-        }
-
-        return false;
-    }
-
-    public bool IsFull(State state)
-    {
-        for (int i = 0; i < 7; i++)
-        {
-            if (state.heights[i] < 6) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public int GetMaxDepth() {
-        if (children == null)
-        {
-            return depth;
-        }
-        int maxDepth = 0;
-        for (int i = 0; i < children.Count; i++)
-        {
-            maxDepth = Mathf.Max(maxDepth, children[i].GetMaxDepth());
-        }
-        return maxDepth;
-    }
-
-    public void CreateChildrenWithRootNoise(float alpha, float epsilon)
-    {
-        // Normal child creation logic:
-        CreateChildren(1.0f); // sets child.prior in some default way
-                          // e.g. from NN policy or uniform
-
-        // Now blend in Dirichlet noise at the root:
-        float[] noise = NoiseUtils.SampleDirichlet(children.Count, alpha);
-
-        for (int i = 0; i < children.Count; i++)
-        {
-            float oldPrior = children[i].prior;  // e.g. from NN
-            float newPrior = (1 - epsilon) * oldPrior + epsilon * noise[i];
-            children[i].prior = newPrior;
-        }
-    }
-
-    public float Search()
-    {
-        if (isTerminal) {
-            lock(lockObject) {
-                N += 1;
-                W += (float)eval;
-                Q = W / N;
-                return (float)eval;
-            }
-        }
-
-        if (children == null) {
-            lock(lockObject) {
-                // Double-check locking pattern
-                if (children == null) {
-                    if (isRootNode) {
-                        CreateChildrenWithRootNoise(0.3f, 0.25f);
-                    } else {
-                        CreateChildren(1.0f);
-                    }
-
-                    foreach (var child in children) {
-                        if (child.isTerminal) {
-                            child.N = 1;
-                            child.W = (float)child.eval;
-                            child.Q = child.W / child.N;
-                        }
-                    }
-
-                    float value = 0f;
-                    if (!isTerminal) {
-                        float[] input = StateToInput(state);
-                        value = valueNetwork.Evaluate(input)[0];
-                        value = redToPlay ? value : -value;
-                    }
-                    W += value;
-                    N += 1;
-                    Q = W / N;
-                    return value;
-                }
-            }
-        }
-
-        float totalVisits;
-        lock(lockObject) {
-            totalVisits = children.Sum(c => c.N);
-        }
-
-        TreeNode bestChild = null;
-        float bestScore = float.NegativeInfinity;
-
-        foreach (var c in children) {
-            float uct;
-            float childN, childQ, childPrior;
-            
-            lock(c.lockObject) {
-                childN = c.N;
-                childQ = c.Q;
-                childPrior = c.prior;
-            }
-
-            if (childN == 0) {
-                uct = c.isTerminal ? ((float)c.eval) : (C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1));
-            } else {
-                uct = childQ + C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1) / (1 + childN);
-            }
-            
-            if (uct > bestScore) {
-                bestScore = uct;
-                bestChild = c;
-            }
-        }
-
-        float childValue = -bestChild.Search();
-
-        lock(lockObject) {
-            W += childValue;
-            N += 1;
-            Q = W / N;
-        }
-
-        return childValue;
-    }
-
-}
-
 public class TrainBoard : MonoBehaviour
 {
     // Start is called once before the first execution of Update after the MonoBehaviour is created
@@ -356,17 +16,37 @@ public class TrainBoard : MonoBehaviour
     public int startGeneration;
     public int numGames;
     public int numEpochs;
-    public int iterations;
+    public int initialIterations = 100;  // Start with fewer iterations
+    public float iterationsGrowthRate = 1.2f;  // Increase by 20% each generation
+    public int maxIterations = 800;  // Cap at 800 iterations
     public string modelName;
+    public float initialTemperature = 1f;
+    public float temperatureDecay = 0.98f;
+    public float initialRootNoise = 0.5f;  // Higher initial noise
+    public float rootNoiseDecay = 0.98f;   // Decay rate for noise
+    public float initialDirichletAlpha = 0.5f;  // Higher Dirichlet alpha
+    public float dirichletAlphaDecay = 0.98f;   // Decay rate for alpha
+    public float trainRatio;
 
     public TMPro.TMP_Text gamesDisplay;
     public TMPro.TMP_Text secondaryDisplay;
     public TMPro.TMP_Text generationText;
+    public TMPro.TMP_Text thirdText;
 
     private List<float[]> valueInputs;
     private List<float[]> valueOutputs;
     private List<float[]> policyInputs;
     private List<float[]> policyOutputs;
+
+    private List<float[]> valueTrainInputs;
+    private List<float[]> valueTrainOutputs;
+    private List<float[]> valueTestInputs;
+    private List<float[]> valueTestOutputs;
+    private List<float[]> policyTrainInputs;
+    private List<float[]> policyTrainOutputs;
+    private List<float[]> policyTestInputs;
+    private List<float[]> policyTestOutputs;
+    private HashSet<BoardState> uniquePositions;
 
     private int epochCounter = 0;
     private int counter = 0;
@@ -374,6 +54,39 @@ public class TrainBoard : MonoBehaviour
     private float startTime;
 
     // Add configuration for parallelization
+
+    public float initialLearningRate = 0.005f;
+    public float learningRateDecay = 0.85f;
+
+    // Add this struct at the class level
+    private struct BoardState : IEquatable<BoardState>
+    {
+        public ulong redBoard;
+        public ulong yellowBoard;
+
+        public BoardState(ulong red, ulong yellow)
+        {
+            redBoard = red;
+            yellowBoard = yellow;
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (obj is BoardState other)
+                return Equals(other);
+            return false;
+        }
+
+        public bool Equals(BoardState other)
+        {
+            return redBoard == other.redBoard && yellowBoard == other.yellowBoard;
+        }
+
+        public override int GetHashCode()
+        {
+            return redBoard.GetHashCode() ^ yellowBoard.GetHashCode();
+        }
+    }
 
     void Start()
     {
@@ -394,6 +107,7 @@ public class TrainBoard : MonoBehaviour
         policyOutputs = new List<float[]>();
 
         startTime = Time.realtimeSinceStartup;
+        uniquePositions = new HashSet<BoardState>();
     }
 
     // Update is called once per frame
@@ -404,42 +118,80 @@ public class TrainBoard : MonoBehaviour
             generationText.text = "Generation " + (generationCounter + 1).ToString();
             if (counter < numGames)
             {
+                int currentIterations = Mathf.Min(
+                    maxIterations,
+                    Mathf.RoundToInt(initialIterations * Mathf.Pow(iterationsGrowthRate, generationCounter))
+                );
+
+                float temperature = initialTemperature * Mathf.Pow(temperatureDecay, generationCounter);
+
                 secondaryDisplay.text = "Epoch 0: -";
 
+                float currentNoise = initialRootNoise * Mathf.Pow(rootNoiseDecay, generationCounter);
+                float currentAlpha = initialDirichletAlpha * Mathf.Pow(dirichletAlphaDecay, generationCounter);
+                
                 BoardNN board = new BoardNN();
                 board.valueNetwork = valueNetwork;
                 board.policyNetwork = policyNetwork;
+                board.rootNoise = currentNoise;
+                board.dirichletAlpha = currentAlpha;
 
                 List<float[]> positions = new List<float[]>();
                 BoardNN.Player winningPlayer;
                 BoardNN.Player currentPlayer = BoardNN.Player.Red;
+
+                // Add initial position
+                positions.Add(GetPosition(board.redBitboard, board.yellowBitboard));
+                uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
+
                 while (true)
-                {
-                    float[] position = GetPosition(board.redBitboard, board.yellowBitboard);
+                {                
                     winningPlayer = board.GetWinningPlayer();
                     if (winningPlayer != BoardNN.Player.None || board.IsFull())
                     {
                         break;
                     }
 
-                    positions.Add(position);
-                    policyInputs.Add(position);
+                    float[] prePosition = GetPosition(board.redBitboard, board.yellowBitboard);
+                    float[] prePositionSymmetric = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
 
+                    int move;
                     if (currentPlayer == BoardNN.Player.Red)
                     {
-                        BoardNN.MoveEval bestMove = board.TreeSearch(iterations, true);
+                        BoardNN.MoveEval bestMove = board.TreeSearch(currentIterations, true, temperature);
                         board.MakeMove(bestMove.Move, currentPlayer);
+                        move = bestMove.Move;
                         currentPlayer = BoardNN.Player.Yellow;
                     }
                     else
                     {
-                        BoardNN.MoveEval bestMove = board.TreeSearch(iterations, false);
+                        BoardNN.MoveEval bestMove = board.TreeSearch(currentIterations, false, temperature);
                         board.MakeMove(bestMove.Move, currentPlayer);
+                        move = bestMove.Move;
                         currentPlayer = BoardNN.Player.Red;
                     }
+
+                    float[] position = GetPosition(board.redBitboard, board.yellowBitboard);
+                    float[] symmetricalPosition = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
+
+                    uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
+                    positions.Add(position);
+                    if (position != symmetricalPosition) {
+                        positions.Add(symmetricalPosition);
+                    }
+                    
                     float[] promise = new float[7];
-                    Array.Copy(board.promise, promise, 7);
+                    
+                    // Normalize promises and explicitly zero out illegal moves
+                    float sum = 0;
+                    for (int i = 0; i < 7; i++) {
+                        promise[i] = board.promise[i];
+                    }
+                    
+                    policyInputs.Add(prePosition);
                     policyOutputs.Add(promise);
+                    policyInputs.Add(prePositionSymmetric);
+                    policyOutputs.Add(promise.Reverse().ToArray());
                 }
 
                 float[] output;
@@ -468,20 +220,40 @@ public class TrainBoard : MonoBehaviour
                 float timePerGame = (currentTime - startTime) / counter;
                 float timeLeft = timePerGame * (numGames - counter);
                 secondaryDisplay.text = " Time Left: ~" + Mathf.RoundToInt(timeLeft).ToString() + "s";
+
+                thirdText.text = $"{uniquePositions.Count} Unique Positions";
             }
             else if (epochCounter < numEpochs)
             {
-                float cost1 = valueNetwork.TrainOneEpoch(valueInputs, valueOutputs, 0.01f, 64);
-                Debug.Log("Training data sizes - Value: " + valueInputs.Count + ", Policy: " + policyInputs.Count);
-                Debug.Log("Policy Input Sample: " + string.Join(", ", policyInputs[0]));
-                Debug.Log("Policy Output Sample: " + string.Join(", ", policyOutputs[0]));
-                Debug.Log("Policy Input Sample: " + string.Join(", ", policyInputs[0]));
-                Debug.Log("Policy Output Sample: " + string.Join(", ", policyOutputs[0]));
-                float cost2 = policyNetwork.TrainOneEpoch(policyInputs, policyOutputs, 0.01f, 64);
-                // should be the same
-                Debug.Log("Number of training samples: " + valueInputs.Count + " " + policyInputs.Count);
+                int trainTestSplit = (int)(trainRatio * valueInputs.Count);
+
+                // Using GetRange for Lists
+                valueTrainInputs = valueInputs.GetRange(0, trainTestSplit);
+                valueTestInputs = valueInputs.GetRange(trainTestSplit, valueInputs.Count - trainTestSplit);
+
+                valueTrainOutputs = valueOutputs.GetRange(0, trainTestSplit);
+                valueTestOutputs = valueOutputs.GetRange(trainTestSplit, valueOutputs.Count - trainTestSplit);
+
+                policyTrainInputs = policyInputs.GetRange(0, trainTestSplit);
+                policyTestInputs = policyInputs.GetRange(trainTestSplit, policyInputs.Count - trainTestSplit);
+
+                policyTrainOutputs = policyOutputs.GetRange(0, trainTestSplit);
+                policyTestOutputs = policyOutputs.GetRange(trainTestSplit, policyOutputs.Count - trainTestSplit);
+
+                Debug.Log($"Training data length: {valueTrainInputs.Count}, Testing data length: {valueTestInputs.Count}");
+                
+                float currentLearningRate = initialLearningRate * Mathf.Pow(learningRateDecay, epochCounter);
+
+                valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 128);
+                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate * 3f, 128);
+
+                float cost1 = valueNetwork.CalculateCost(valueTestInputs, valueTestOutputs);
+                float cost2 = policyNetwork.CalculateCost(policyTestInputs, policyTestOutputs);
+                
                 epochCounter += 1;
-                secondaryDisplay.text = "Epoch: " + epochCounter.ToString() + " Cost: " + cost1.ToString();
+                Debug.Log("Value cost: " + cost1.ToString());
+                Debug.Log("Policy cost: " + cost2.ToString());
+                secondaryDisplay.text = "Epoch " + epochCounter.ToString() + " | Value cost: " + cost1.ToString("F4") + " | Policy cost: " + cost2.ToString("F4");
             }
             else
             {
@@ -489,6 +261,13 @@ public class TrainBoard : MonoBehaviour
                 int numGamesDone = generationCounter * numGames;
                 valueNetwork.SaveNetwork(modelName+"-value" + numGamesDone.ToString());
                 policyNetwork.SaveNetwork(modelName+"-policy" + numGamesDone.ToString());
+
+                valueInputs.Clear();
+                valueOutputs.Clear();
+                policyInputs.Clear();
+                policyOutputs.Clear();
+                uniquePositions.Clear();
+                
                 epochCounter = 0;
                 counter = 0;
                 startTime = Time.realtimeSinceStartup;
@@ -496,418 +275,87 @@ public class TrainBoard : MonoBehaviour
         }
     }
 
-    public float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
+    public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        bool[] bits = new bool[128];
-
-        for (int i = 0; i < 64; i++)
-        {
-            bits[i] = (redBitboard & (1UL << i)) != 0;
-            bits[64 + i] = (yellowBitboard & (1UL << i)) != 0;
-        }
-
-        // Create the output array for 84 floats
+        // Create the output array for 84 floats (42 for red, 42 for yellow)
         float[] result = new float[84];
 
-        // Copy every 6 bits, skipping 2 buffer bits after every 6 bits
-        int resultIndex = 0;
-        for (int i = 0; i < bits.Length; i += 8)
+        // Match the exact same position calculation as ShowBoard
+        for (int col = 0; col < 7; col++)
         {
-            for (int j = 0; j < 6; j++) // Copy 6 bits as floats
+            for (int row = 0; row < 6; row++)
             {
-                if (resultIndex < 84)
-                {
-                    result[resultIndex++] = bits[i + j] ? 1.0f : 0.0f;
-                }
+                int bitPosition = 8 * col + row;
+                int nnPosition = col * 6 + row;
+                
+                bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
+                bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
+                
+                result[nnPosition] = isRed ? 1.0f : 0.0f;
+                result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
             }
-            // Skip the 2 buffer bits
         }
 
         return result;
     }
-}
 
-public class BoardNN
-{
-    public enum Player { None, Red, Yellow };
-    public enum NodeType
+    public float[] GetSymmetricalPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        EXACT,
-        LOWERBOUND,
-        UPPERBOUND
-    }
+        // First get the neural network input representation
+        float[] nnInput = GetPosition(redBitboard, yellowBitboard);
+        float[] symmetricInput = new float[84];
 
-    public ulong redBitboard;
-    public ulong yellowBitboard;
-    public int nodes;
-    public int[] heights;
-    public int[] redHeights;
-    public int[] yellowHeights;
-    public Dictionary<ulong, TTEntry> tt;
-    public EvaluationFunction evaluationFunction;
-    public NeuralNetwork valueNetwork;
-    public NeuralNetwork policyNetwork;
-
-    public float[] redPositionalVals = new float[7] { 0, 1, 2, 3, 2, 1, 0 };
-    public float[] yellowPositionVals = new float[7] { 1, 0, 1.5f, 3.5f, 1.5f, 0, 1 };
-
-    public ulong zobristHash;
-    private ulong[] zobristTable;
-    public float maxDepth;
-    public float[] promise;
-
-    private readonly ParallelOptions parallelOptions = new ParallelOptions {
-        MaxDegreeOfParallelism = System.Environment.ProcessorCount // Use all available cores
-    };
-
-    public BoardNN()
-    {
-        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        promise = new float[7];
-        InitiateBoard();
-        InitializeZobrist();
-    }
-
-    // 0, 1, 2, .., 5 = first column
-    public void InitiateBoard()
-    {
-        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        redHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        yellowHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-
-        redBitboard = 0;
-        yellowBitboard = 0;
-        tt = new Dictionary<ulong, TTEntry>();
-    }
-
-    public void ResetBoard()
-    {
-        redBitboard = 0;
-        yellowBitboard = 0;
-        heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        redHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        yellowHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        tt.Clear();
-        zobristHash = 0;
-    }
-
-    public TreeNode GetRootNode(bool isRed) {
-        State state = new State(redBitboard, yellowBitboard, heights);
-        TreeNode rootNode = new TreeNode(valueNetwork, policyNetwork, state);
-        rootNode.redToPlay = isRed;
-        rootNode.depth = 0;
-        rootNode.isRootNode = true;
-        return rootNode;
-    }
-
-    public MoveEval BestMove(TreeNode rootNode) {
-        TreeNode bestChild = null;
-        float bestVisits = -1f;
-    
-        foreach (var child in rootNode.children)
+        // For each row
+        for (int row = 0; row < 6; row++)
         {
-            if (child.N > bestVisits)
+            // For each column
+            for (int col = 0; col < 7; col++)
             {
-                bestVisits = child.N;
-                bestChild = child;
+                // Calculate source and target indices
+                int sourceIndex = col * 6 + row;
+                int targetIndex = (6 - col) * 6 + row;  // Flip column horizontally
+
+                // Copy red pieces (first 42 values)
+                symmetricInput[targetIndex] = nnInput[sourceIndex];
+                
+                // Copy yellow pieces (last 42 values)
+                symmetricInput[targetIndex + 42] = nnInput[sourceIndex + 42];
             }
         }
 
-        maxDepth = rootNode.GetMaxDepth();
-        // Return the best child’s column and Q as the chosen move:
-        int bestMove = (bestChild != null) ? bestChild.priorMove : -1;
-        float bestEval = (bestChild != null) ? bestChild.Q : 0;
-        return new MoveEval(bestMove, bestEval);
+        return symmetricInput;
     }
 
-    public MoveEval TreeSearch(int iterations, bool isRed)
+    public static void ShowBoardFromNNInput(float[] nnInput)
     {
-        TreeNode rootNode = GetRootNode(isRed);
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.AppendLine("Board State from NN Input:");
+        sb.AppendLine("-----------------------------");
         
-        // Create a counter for progress tracking
-        int completedIterations = 0;
-
-        try {
-            Parallel.For(0, iterations, parallelOptions, i => {
-                rootNode.Search();
-                Interlocked.Increment(ref completedIterations);
-            });
-        }
-        catch (AggregateException ae) {
-            Debug.LogError($"Parallel search failed: {ae.Message}");
-            foreach (var e in ae.InnerExceptions) {
-                Debug.LogError($"Inner exception: {e.Message}");
-            }
-        }
-
-        maxDepth = rootNode.GetMaxDepth();
-
-        // Calculate promises (visit counts)
-        TreeNode bestChild = null;
-        float bestVisits = -1f;
-        int totalVisits = 0;
-    
-        foreach (var child in rootNode.children) {
-            totalVisits += (int)child.N;
-            promise[child.priorMove] = (float)child.N;
-            if (child.N > bestVisits) {
-                bestVisits = child.N;
-                bestChild = child;
-            }
-        }
-
-        // Normalize promises
-        for (int i = 0; i < 7; i++) {
-            promise[i] /= (float)totalVisits;
-        }
-
-        int bestMove = (bestChild != null) ? bestChild.priorMove : -1;
-        float bestEval = (bestChild != null) ? bestChild.Q : 0;
-        return new MoveEval(bestMove, bestEval);
-    }
-
-    public void InitializeZobrist()
-    {
-        var random = new System.Random();
-        zobristTable = new ulong[128];
-        for (int i = 0; i < 128; i++)
+        // Print from top to bottom
+        for (int row = 5; row >= 0; row--)
         {
-            ulong sixteenBits = (ulong)random.Next(1 << 16);
-            ulong sixteenBits2 = (ulong)random.Next(1 << 16);
-            ulong sixteenBits3 = (ulong)random.Next(1 << 16);
-            ulong sixteenBits4 = (ulong)random.Next(1 << 16);
-            ulong fullRange = (sixteenBits << 48) | (sixteenBits2 << 32) | (sixteenBits3 << 16) | (sixteenBits4);
-            zobristTable[i] = fullRange;
-        }
-        zobristHash = 0;
-    }
-
-    public float HeuristicEvaluation()
-    {
-        return evaluationFunction(redBitboard, yellowBitboard);
-    }
-
-    public List<int> GetValidMoves()
-    {
-        List<int> moves = new List<int>();
-        if (heights[3] < 6)
-        {
-            moves.Add(3);
-        }
-        for (int i = 1; i < 4; i++)
-        {
-            if (heights[3 + i] < 6)
+            string currentRow = "|";
+            for (int col = 0; col < 7; col++)
             {
-                moves.Add(3 + i);
+                // Calculate position in the NN input array
+                // For each position, check both red and yellow arrays
+                int index = (col * 6) + row;  // Position in the column
+                bool isRed = nnInput[index] > 0.5f;
+                bool isYellow = nnInput[index + 42] > 0.5f;
+                
+                char piece = ' ';
+                if (isRed) piece = 'R';
+                else if (isYellow) piece = 'Y';
+                
+                currentRow += $" {piece} |";
             }
-            if (heights[3 - i] < 6)
-            {
-                moves.Add(3 - i);
-            }
+            sb.AppendLine(currentRow);
         }
-        return moves;
-    }
-
-    public List<int> SortedMoves(List<int> validMoves, int exploreFirst)
-    {
-        List<int> sortedMoves = new List<int>();
-        if (exploreFirst != -1)
-        {
-            sortedMoves.Add(exploreFirst);
-        }
-        if (validMoves.Contains(3))
-        {
-            sortedMoves.Add(3);
-        }
-        for (int i = 1; i < 4; i++)
-        {
-            if (validMoves.Contains(3 + i))
-            {
-                sortedMoves.Add(3 + i);
-            }
-            if (validMoves.Contains(3 - i))
-            {
-                sortedMoves.Add(3 - i);
-            }
-        }
-        return sortedMoves;
-    }
-
-    private bool HasConnectFour(ulong b)
-    {
-        // 1) Vertical check (shift by 1)
-        {
-            ulong m = b & (b >> 1);
-            // If we can still find 2 more consecutive after that, there is a 4.
-            if ((m & (m >> 2)) != 0UL)
-                return true;
-        }
-
-        // 2) Horizontal check (shift by 6)
-        {
-            ulong m = b & (b >> 8);
-            if ((m & (m >> 16)) != 0UL)
-                return true;
-        }
-
-        // 3) Diagonal up-right (shift by 7)
-        {
-            ulong m = b & (b >> 9);
-            if ((m & (m >> 18)) != 0UL)
-                return true;
-        }
-
-        // 4) Diagonal up-left (shift by 5)
-        {
-            ulong m = b & (b >> 7);
-            if ((m & (m >> 14)) != 0UL)
-                return true;
-        }
-
-        return false;
-    }
-
-
-    public Player GetWinningPlayer()
-    {
-        if (HasConnectFour(redBitboard))
-        {
-            return Player.Red;
-        }
-        if (HasConnectFour(yellowBitboard))
-        {
-            return Player.Yellow;
-        }
-        return Player.None;
-    }
-
-    public Player GetBit(int position)
-    {
-        bool redVal = (redBitboard & ((ulong)1 << position)) != 0;
-        if (redVal) return Player.Red;
-        bool yellowVal = (yellowBitboard & ((ulong)1 << position)) != 0;
-        if (yellowVal) return Player.Yellow;
-        return Player.None;
-    }
-
-    public bool IsFull()
-    {
-        for (int i = 0; i < 7; i++)
-        {
-            if (heights[i] < 6)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public void MakeMove(int column, Player player)
-    {
-        // First 6 = column 1 (row 1-6)
-        // Next 6 = column 2 (row 1-6)
-        // etc
-
-        int bitPosition = 8 * column + heights[column];
-        if (player == Player.Red)
-        {
-            redBitboard |= ((ulong)1 << bitPosition);
-            zobristHash ^= zobristTable[2 * bitPosition];
-            redHeights[column] += 1;
-        }
-        else
-        {
-            yellowBitboard |= ((ulong)1 << bitPosition);
-            zobristHash ^= zobristTable[2 * bitPosition + 1];
-            yellowHeights[column] += 1;
-        }
-        heights[column] += 1;
-    }
-
-    public void UnmakeMove(int column, Player player)
-    {
-        int bitPosition = 8 * column + heights[column] - 1;
-        if (player == Player.Red)
-        {
-            redBitboard = redBitboard & ~((ulong)1 << bitPosition);
-            zobristHash ^= zobristTable[2 * bitPosition];
-            redHeights[column] -= 1;
-        }
-        else
-        {
-            yellowBitboard = yellowBitboard & ~((ulong)1 << bitPosition);
-            zobristHash ^= zobristTable[2 * bitPosition + 1];
-            yellowHeights[column] -= 1;
-        }
-        heights[column] -= 1;
-    }
-
-    public bool IsValidMove(int column)
-    {
-        return heights[column] < 6;
-    }
-
-    public static int CountBits(ulong value)
-    {
-        int count = 0;
-        while (value != 0)
-        {
-            count++;
-            value &= value - 1;
-        }
-        return count;
-    }
-
-    public struct MoveEval
-    {
-        public MoveEval(int move, float eval)
-        {
-            Move = move;
-            Eval = eval;
-        }
-
-        public int Move { get; }
-        public float Eval { get; }
-    }
-
-    private void StoreTT(float value, int bestMove, int depth, float alphaOriginal, float beta)
-    {
-        NodeType nodeType;
-
-        // If the eval is <= alphaOriginal, then we had an "upper bound" case
-        if (value <= alphaOriginal)
-        {
-            nodeType = NodeType.UPPERBOUND;
-        }
-        // If the eval is >= beta, then we had a "lower bound" case
-        else if (value >= beta)
-        {
-            nodeType = NodeType.LOWERBOUND;
-        }
-        // Otherwise it’s an exact value
-        else
-        {
-            nodeType = NodeType.EXACT;
-        }
-
-        TTEntry entry = new TTEntry(value, bestMove, depth, nodeType);
-        tt[zobristHash] = entry;
-    }
-
-    public struct TTEntry
-    {
-        public float Value;      // The evaluation score
-        public int BestMove;     // The move that led to Value
-        public int Depth;        // The depth at which this was computed
-        public NodeType Type;    // EXACT, LOWERBOUND, or UPPERBOUND
-
-        public TTEntry(float value, int bestMove, int depth, NodeType type)
-        {
-            Value = value;
-            BestMove = bestMove;
-            Depth = depth;
-            Type = type;
-        }
+        
+        sb.AppendLine("-----------------------------");
+        sb.AppendLine("  1   2   3   4   5   6   7  ");
+        
+        Debug.Log(sb.ToString());
     }
 }
-

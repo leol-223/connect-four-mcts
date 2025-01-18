@@ -54,9 +54,16 @@ public class NNTest : MonoBehaviour
                         float x = UnityEngine.Random.Range(-1f, 1f);
                         float y = UnityEngine.Random.Range(-1f, 1f);
                         bool inCircle = (x * x + y * y <= 1);
+                        bool inInnerCircle = (x * x + y * y <= 0.25f);
 
                         inputs.Add(new float[] { x, y });
-                        outputs.Add(inCircle ? new float[] { 1, 0, 0 } : new float[] { 0, 1, 0 });
+                        if (inInnerCircle) {
+                            outputs.Add(new float[] {1, 0, 0});
+                        } else if (inCircle) {
+                            outputs.Add(new float[] {0, 1, 0});
+                        } else {
+                            outputs.Add(new float[] {0, 0, 1});
+                        }
                     }
 
                     float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 15);

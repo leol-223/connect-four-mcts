@@ -25,6 +25,8 @@ public class GameManager : MonoBehaviour
     public int[] policyShape;
     public NeuralNetwork valueNetwork;
     public NeuralNetwork policyNetwork;
+    public float temperature;
+    public bool rootNoise;
 
     private float minTokenDelay = 0.1f;
     private BoardNN board;
@@ -96,6 +98,7 @@ public class GameManager : MonoBehaviour
                         {
                             if (!searchStarted) {
                                 rootNode = board.GetRootNode(currentPlayer == Board.Player.Red);
+                                // make it deterministic
                                 searchStarted = true;
                                 DebugPolicyOutputs(board.redBitboard, board.yellowBitboard);
                             }
@@ -105,12 +108,12 @@ public class GameManager : MonoBehaviour
                             float endTime = Time.realtimeSinceStartup;
                             */
                             for (int i = 0; i < 200; i++) {
-                                rootNode.Search();
+                                rootNode.Search(0, 0);
                                 currentIter += 1;
                             }
-                            BoardNN.MoveEval move = board.BestMove(rootNode);
+                            BoardNN.MoveEval move = board.BestMove(rootNode, temperature);
 
-                            Debug.Log($"Col {move.Move + 1} | Evaluation: {move.Eval} | Max depth: {board.maxDepth}");
+                            Debug.Log($"Col {move.Move + 1} | Evaluation: {move.Eval} | Max depth: {rootNode.GetMaxDepth()}");
                             ShowPointer(currentPlayer, move.Move);
                             if (currentIter >= searchIterations)
                             {
@@ -388,29 +391,22 @@ public class GameManager : MonoBehaviour
 
     public float[] GetNeuralInput(ulong redBitboard, ulong yellowBitboard)
     {
-        bool[] bits = new bool[128];
-
-        for (int i = 0; i < 64; i++)
-        {
-            bits[i] = (redBitboard & (1UL << i)) != 0;
-            bits[64 + i] = (yellowBitboard & (1UL << i)) != 0;
-        }
-
-        // Create the output array for 84 floats
         float[] result = new float[84];
 
-        // Copy every 6 bits, skipping 2 buffer bits after every 6 bits
-        int resultIndex = 0;
-        for (int i = 0; i < bits.Length; i += 8)
+        // Match the exact same position calculation as ShowBoard
+        for (int col = 0; col < 7; col++)
         {
-            for (int j = 0; j < 6; j++) // Copy 6 bits as floats
+            for (int row = 0; row < 6; row++)
             {
-                if (resultIndex < 84)
-                {
-                    result[resultIndex++] = bits[i + j] ? 1.0f : 0.0f;
-                }
+                int bitPosition = 8 * col + row;
+                int nnPosition = col * 6 + row;
+                
+                bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
+                bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
+                
+                result[nnPosition] = isRed ? 1.0f : 0.0f;
+                result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
             }
-            // Skip the 2 buffer bits
         }
 
         return result;
