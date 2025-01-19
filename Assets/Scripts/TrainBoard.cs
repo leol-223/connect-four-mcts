@@ -16,17 +16,19 @@ public class TrainBoard : MonoBehaviour
     public int startGeneration;
     public int numGames;
     public int numEpochs;
-    public int initialIterations = 100;  // Start with fewer iterations
-    public float iterationsGrowthRate = 1.2f;  // Increase by 20% each generation
-    public int maxIterations = 800;  // Cap at 800 iterations
+    public int initialIterations;
+    public float iterationsGrowthRate;
+    public int maxIterations;
     public string modelName;
-    public float initialTemperature = 1f;
-    public float temperatureDecay = 0.98f;
-    public float initialRootNoise = 0.5f;  // Higher initial noise
-    public float rootNoiseDecay = 0.98f;   // Decay rate for noise
-    public float initialDirichletAlpha = 0.5f;  // Higher Dirichlet alpha
-    public float dirichletAlphaDecay = 0.98f;   // Decay rate for alpha
+    public float initialTemperature;
+    public float temperatureDecay;
+    public float initialRootNoise;
+    public float rootNoiseDecay;
+    public float initialDirichletAlpha;
+    public float dirichletAlphaDecay;
     public float trainRatio;
+    public float initialLearningRate = 0.001f;
+    public float learningRateDecay = 0.95f;
 
     public TMPro.TMP_Text gamesDisplay;
     public TMPro.TMP_Text secondaryDisplay;
@@ -52,11 +54,6 @@ public class TrainBoard : MonoBehaviour
     private int counter = 0;
     private int generationCounter = 0;
     private float startTime;
-
-    // Add configuration for parallelization
-
-    public float initialLearningRate = 0.005f;
-    public float learningRateDecay = 0.85f;
 
     // Add this struct at the class level
     private struct BoardState : IEquatable<BoardState>
@@ -93,11 +90,10 @@ public class TrainBoard : MonoBehaviour
         valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
         policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
 
-        generationCounter = startGeneration;
-        int numGamesDone = startGeneration * numGames;
         if (startGeneration > 0) {
-            valueNetwork.LoadNetwork(modelName+"-value" + numGamesDone.ToString());
-            policyNetwork.LoadNetwork(modelName+"-policy" + numGamesDone.ToString());
+            valueNetwork.LoadNetwork(modelName+"-V" + startGeneration.ToString());
+            policyNetwork.LoadNetwork(modelName+"-P" + startGeneration.ToString());
+            generationCounter = startGeneration;
         }
 
         valueInputs = new List<float[]>();
@@ -125,6 +121,9 @@ public class TrainBoard : MonoBehaviour
 
                 float temperature = initialTemperature * Mathf.Pow(temperatureDecay, generationCounter);
 
+                Debug.Log($"Temperature: {temperature}");
+                Debug.Log($"Num iterations: {currentIterations}");
+
                 secondaryDisplay.text = "Epoch 0: -";
 
                 float currentNoise = initialRootNoise * Mathf.Pow(rootNoiseDecay, generationCounter);
@@ -140,10 +139,6 @@ public class TrainBoard : MonoBehaviour
                 BoardNN.Player winningPlayer;
                 BoardNN.Player currentPlayer = BoardNN.Player.Red;
 
-                // Add initial position
-                positions.Add(GetPosition(board.redBitboard, board.yellowBitboard));
-                uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
-
                 while (true)
                 {                
                     winningPlayer = board.GetWinningPlayer();
@@ -152,8 +147,9 @@ public class TrainBoard : MonoBehaviour
                         break;
                     }
 
-                    float[] prePosition = GetPosition(board.redBitboard, board.yellowBitboard);
-                    float[] prePositionSymmetric = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
+                    float[] position = GetPosition(board.redBitboard, board.yellowBitboard);
+                    float[] symmetricalPosition = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
+                    uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
 
                     int move;
                     if (currentPlayer == BoardNN.Player.Red)
@@ -170,11 +166,7 @@ public class TrainBoard : MonoBehaviour
                         move = bestMove.Move;
                         currentPlayer = BoardNN.Player.Red;
                     }
-
-                    float[] position = GetPosition(board.redBitboard, board.yellowBitboard);
-                    float[] symmetricalPosition = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
-
-                    uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
+                    
                     positions.Add(position);
                     if (position != symmetricalPosition) {
                         positions.Add(symmetricalPosition);
@@ -188,9 +180,9 @@ public class TrainBoard : MonoBehaviour
                         promise[i] = board.promise[i];
                     }
                     
-                    policyInputs.Add(prePosition);
+                    policyInputs.Add(position);
                     policyOutputs.Add(promise);
-                    policyInputs.Add(prePositionSymmetric);
+                    policyInputs.Add(symmetricalPosition);
                     policyOutputs.Add(promise.Reverse().ToArray());
                 }
 
@@ -245,7 +237,7 @@ public class TrainBoard : MonoBehaviour
                 float currentLearningRate = initialLearningRate * Mathf.Pow(learningRateDecay, epochCounter);
 
                 valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 128);
-                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate * 3f, 128);
+                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate * 2f, 128);
 
                 float cost1 = valueNetwork.CalculateCost(valueTestInputs, valueTestOutputs);
                 float cost2 = policyNetwork.CalculateCost(policyTestInputs, policyTestOutputs);
@@ -258,9 +250,8 @@ public class TrainBoard : MonoBehaviour
             else
             {
                 generationCounter += 1;
-                int numGamesDone = generationCounter * numGames;
-                valueNetwork.SaveNetwork(modelName+"-value" + numGamesDone.ToString());
-                policyNetwork.SaveNetwork(modelName+"-policy" + numGamesDone.ToString());
+                valueNetwork.SaveNetwork(modelName+"-V" + generationCounter.ToString());
+                policyNetwork.SaveNetwork(modelName+"-P" + generationCounter.ToString());
 
                 valueInputs.Clear();
                 valueOutputs.Clear();

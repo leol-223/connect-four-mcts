@@ -17,30 +17,16 @@ public class NNTest : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        try {
-            Debug.Log("Starting NNTest initialization...");
-            Debug.Log($"Network shape: {string.Join(", ", shape)}");
-            
-            nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, 
-                NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, 
-                NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
-            
-            Debug.Log("Neural network initialized successfully");
-        }
-        catch (Exception e) {
-            Debug.LogError($"Error in Start: {e.Message}\n{e.StackTrace}");
-        }
+        shape = new int[] { 2, 16, 16, 4 };
+        nn = new NeuralNetwork(shape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, 
+            NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, 
+            NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
     }
 
     // Update is called once per frame
     void Update()
     {
         try {
-            if (nn == null) {
-                Debug.LogError("Neural network is null!");
-                return;
-            }
-
             if (counter < maxIterations)
             {
                 for (int i = 0; i < numIterationsPerUpdate; i++)
@@ -49,26 +35,29 @@ public class NNTest : MonoBehaviour
                     List<float[]> outputs = new List<float[]>();
 
                     // Generate training data
-                    for (int j = 0; j < 128; j++)
+                    for (int j = 0; j < 256; j++)
                     {
                         float x = UnityEngine.Random.Range(-1f, 1f);
                         float y = UnityEngine.Random.Range(-1f, 1f);
-                        bool inCircle = (x * x + y * y <= 1);
-                        bool inInnerCircle = (x * x + y * y <= 0.25f);
+                        
+                        // Complex spiral pattern with 4 classes
+                        float angle = Mathf.Atan2(y, x);
+                        float radius = Mathf.Sqrt(x * x + y * y);
+                        float adjustedAngle = angle + radius * 4f; // Creates spiral effect
+                        int category = Mathf.FloorToInt(((adjustedAngle + Mathf.PI) / (2f * Mathf.PI) * 4f)) % 4;
 
                         inputs.Add(new float[] { x, y });
-                        if (inInnerCircle) {
-                            outputs.Add(new float[] {1, 0, 0});
-                        } else if (inCircle) {
-                            outputs.Add(new float[] {0, 1, 0});
-                        } else {
-                            outputs.Add(new float[] {0, 0, 1});
-                        }
+                        outputs.Add(new float[] {
+                            category == 0 ? 1f : 0f,
+                            category == 1 ? 1f : 0f,
+                            category == 2 ? 1f : 0f,
+                            category == 3 ? 1f : 0f
+                        });
                     }
 
-                    float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 15);
+                    float avgCost = nn.TrainOneEpoch(inputs, outputs, learningRate, 32);
                     if (text != null) {
-                        text.text = "Cost: " + avgCost.ToString();
+                        text.text = $"Iteration: {counter}, Cost: {avgCost:F6}";
                     }
 
                     counter += 1;

@@ -117,7 +117,10 @@ public class TreeNode {
             else
             {
                 float[] input = StateToInput(childState);
-                float nnValue = valueNetwork.Evaluate(input)[0];
+                // for testing purposes, try to get it to prioritize placing everything in the third column
+                // it thinks it's good for red for more pieces to be in the middle (yellow or red)
+                // float nnValue = -(child.state.heights[3]*2f+child.state.heights[2]+child.state.heights[4]);
+                float nnValue = -valueNetwork.Evaluate(input)[0];
                 child.eval = child.redToPlay ? -nnValue : nnValue;
             }
 
@@ -294,7 +297,7 @@ public class TreeNode {
                     if (!isTerminal) {
                         float[] input = StateToInput(state);
                         value = valueNetwork.Evaluate(input)[0];
-                        value = redToPlay ? value : -value;
+                        value = redToPlay ? -value : value;
                     }
                     W += value;
                     N += 1;

@@ -179,10 +179,10 @@ MonoBehaviour:
   boardPadding: 0.1
   yLevel: -0.7
   dropHeight: 3.8
-  valuePath: Astra-value8000
-  policyPath: Astra-policy8000
-  valueShape: 540000008000000040000000200000001000000001000000
-  policyShape: 540000008000000040000000200000001000000007000000
+  valuePath: Lyra-V2
+  policyPath: Lyra-P2
+  valueShape: 54000000400000002000000001000000
+  policyShape: 54000000400000002000000007000000
   temperature: 0
   rootNoise: 0
 --- !u!1 &519420028
