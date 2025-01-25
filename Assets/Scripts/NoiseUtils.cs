@@ -5,7 +5,7 @@ public static class NoiseUtils
 {
     private static readonly ThreadLocal<Random> random = 
         new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref randomSeed)));
-    private static int randomSeed = Environment.TickCount;
+    private static int randomSeed = Environment.TickCount ^ Guid.NewGuid().GetHashCode();
 
     public static float[] SampleDirichlet(int dim, float alpha)
     {
@@ -15,6 +15,18 @@ public static class NoiseUtils
         {
             gammas[i] = SampleGamma(alpha, 1.0f);
             sum += gammas[i];
+        }
+
+        // Protect against division by zero
+        if (sum <= float.Epsilon)
+        {
+            // Fallback to uniform distribution
+            float uniformValue = 1.0f / dim;
+            for (int i = 0; i < dim; i++)
+            {
+                gammas[i] = uniformValue;
+            }
+            return gammas;
         }
 
         // Normalize
@@ -27,6 +39,12 @@ public static class NoiseUtils
 
     public static float SampleGamma(float alpha, float scale)
     {
+        // Protect against invalid inputs
+        if (float.IsNaN(alpha) || float.IsNaN(scale) || alpha <= 0 || scale <= 0)
+        {
+            return 0.0f;
+        }
+
         if (alpha < 1)
         {
             float u = (float)random.Value.NextDouble();

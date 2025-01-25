@@ -1,5 +1,8 @@
 using UnityEngine;
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Linq;
 
 public class GameManager : MonoBehaviour
 {
@@ -48,6 +51,8 @@ public class GameManager : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
+        TreeNode.SetExplorationConstraints(true);
+
         if (!aiPlayers.Contains(Board.Player.Red))
         {
             slidingToken = Instantiate(tokenPrefab);
@@ -98,22 +103,22 @@ public class GameManager : MonoBehaviour
                         {
                             if (!searchStarted) {
                                 rootNode = board.GetRootNode(currentPlayer == Board.Player.Red);
-                                // make it deterministic
                                 searchStarted = true;
-                                DebugPolicyOutputs(board.redBitboard, board.yellowBitboard);
                             }
-                            /*
-                            float startTime = Time.realtimeSinceStartup;
-                            BoardNN.MoveEval move = board.TreeSearch(searchIterations, isRed);
-                            float endTime = Time.realtimeSinceStartup;
-                            */
-                            for (int i = 0; i < 200; i++) {
-                                rootNode.Search(0, 0);
-                                currentIter += 1;
+
+                            try {
+                                Parallel.For(0, 800, i => {
+                                    rootNode.Search(0, 0);
+                                });
+                                currentIter += 800;
                             }
+                            catch (AggregateException ae) {
+                                Debug.LogError($"Parallel search failed: {ae.Message}");
+                            }
+
                             BoardNN.MoveEval move = board.BestMove(rootNode, temperature);
 
-                            Debug.Log($"Col {move.Move + 1} | Evaluation: {move.Eval} | Max depth: {rootNode.GetMaxDepth()}");
+                            DebugSearchStatistics(rootNode);
                             ShowPointer(currentPlayer, move.Move);
                             if (currentIter >= searchIterations)
                             {
@@ -421,5 +426,36 @@ public class GameManager : MonoBehaviour
         {
             Debug.Log("Column " + i + ": " + evaluation[i]);
         }
+    }
+
+    public void DebugSearchStatistics(TreeNode rootNode) {
+        float totalVisits = rootNode.children.Sum(c => c.N);
+        
+        var stats = new List<string>();
+        foreach (var child in rootNode.children) {
+            int col = child.priorMove;
+            float visits = child.N;
+            float value = child.Q;
+            float prior = child.prior;
+            float visitPercentage = visits / totalVisits * 100;
+            
+            stats.Add($"Column {col + 1}: " +
+                     $"Visits={visits} ({visitPercentage:F1}%), " +
+                     $"Value={value:F3}, " +
+                     $"Prior={prior:F3}");
+        }
+        
+        // Sort by visit count for easier comparison
+        stats.Sort((a, b) => {
+            float visitsA = float.Parse(a.Split('=')[1].Split(' ')[0]);
+            float visitsB = float.Parse(b.Split('=')[1].Split(' ')[0]);
+            return visitsB.CompareTo(visitsA);
+        });
+        
+        string statString = "";
+        foreach (var stat in stats) {
+            statString += (stat+"\n");
+        }
+        Debug.Log(statString);
     }
 }

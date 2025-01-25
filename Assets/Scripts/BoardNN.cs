@@ -66,7 +66,6 @@ public class BoardNN
         TreeNode rootNode = new TreeNode(valueNetwork, policyNetwork, state);
         rootNode.redToPlay = isRed;
         rootNode.depth = 0;
-        rootNode.isRootNode = true;
         return rootNode;
     }
 
@@ -184,7 +183,7 @@ public class BoardNN
                     return new MoveEval(rootNode.children[i].priorMove, rootNode.children[i].Q);
                 }
             }
-        }
+        }        
 
         int bestMove = (bestChild != null) ? bestChild.priorMove : -1;
         float bestEval = (bestChild != null) ? bestChild.Q : 0;

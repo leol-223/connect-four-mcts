@@ -129,6 +129,9 @@ public class NeuralNetwork
     private ErrorFunction errorFunction;
     private ErrorDerivative errorDerivative;
     private List<float[]> currentBiasDerivatives;
+    private const float EPSILON = 1e-7f;
+    private const float ONE_MINUS_EPSILON = 1f - 1e-7f;
+
     public NeuralNetwork(int[] shape, ActivationFunction activationFunction, ActivationFunction outputActivation, ActivationDerivative activationDerivative, ActivationDerivative outputDerivative, ErrorFunction errorFunction, ErrorDerivative errorDerivative) {
         this.shape = shape;
         int numLayers = shape.Length - 1;
@@ -267,7 +270,9 @@ public class NeuralNetwork
             if (i == layers.Length - 1)
             {
                 float[] outputGradients = errorDerivative(output, expectedOutput);
+
                 float[] preActivationGradients = outputDerivative(layers[layers.Length - 1].preActivationOutput, outputGradients);
+                
                 for (int j = 0; j < shape[i+1]; j++) {
                     layers[i].biasGradients[j] += preActivationGradients[j];
                     currentBiasDerivatives[i][j] = preActivationGradients[j];
@@ -348,7 +353,10 @@ public class NeuralNetwork
         float cost = 0f;
         for (int i = 0; i < outputs.Length; i++)
         {
-            cost += (-expectedOutputs[i] * Mathf.Log(outputs[i]));
+            // Using min/max is slightly faster than Clamp for single bounds
+            float clippedOutput = outputs[i] < EPSILON ? EPSILON : 
+                                (outputs[i] > ONE_MINUS_EPSILON ? ONE_MINUS_EPSILON : outputs[i]);
+            cost += (-expectedOutputs[i] * Mathf.Log(clippedOutput));
         }
         return cost / outputs.Length;
     }
@@ -358,8 +366,9 @@ public class NeuralNetwork
         float[] outputGradients = new float[output.Length];
         for (int i = 0; i < output.Length; i++)
         {
-            float gradient = -expectedOutput[i] / output[i];
-            outputGradients[i] = gradient;
+            float clippedOutput = output[i] < EPSILON ? EPSILON : 
+                                 (output[i] > ONE_MINUS_EPSILON ? ONE_MINUS_EPSILON : output[i]);
+            outputGradients[i] = -expectedOutput[i] / clippedOutput;
         }
         return outputGradients;
     }
@@ -380,6 +389,30 @@ public class NeuralNetwork
         for (int i = 0; i < inputs.Length; i++)
         {
             derivatives[i] = inputs[i] > 0 ? prevGradients[i] : 0;
+        }
+        return derivatives;
+    }
+
+    public static float[] LeakyReLU(float[] inputs)
+    {
+        float[] outputs = new float[inputs.Length];
+        for (int i = 0; i < inputs.Length; i++)
+        {
+            if (inputs[i] > 0) {
+                outputs[i] = inputs[i];
+            } else {
+                outputs[i] = inputs[i] * 0.01f;
+            }
+        }
+        return outputs;
+    }
+
+    public static float[] LeakyReLUDerivative(float[] inputs, float[] prevGradients)
+    {
+        float[] derivatives = new float[inputs.Length];
+        for (int i = 0; i < inputs.Length; i++)
+        {
+            derivatives[i] = inputs[i] > 0 ? prevGradients[i] : -0.01f * prevGradients[i];
         }
         return derivatives;
     }
@@ -435,12 +468,20 @@ public class NeuralNetwork
         float[] outputs = new float[inputs.Length];
         float[] exps = new float[inputs.Length];
         float sum = 0;
+
+        // Find maximum input for numerical stability
+        float maxInput = inputs[0];
+        for (int i = 1; i < inputs.Length; i++) {
+            maxInput = Mathf.Max(maxInput, inputs[i]);
+        }
+
         for (int i = 0; i < inputs.Length; i++)
         {
-            float power = Mathf.Exp(inputs[i]);
+            float power = Mathf.Exp(inputs[i] - maxInput);
             exps[i] = power;
             sum += power;
         }
+        
         for (int i = 0; i < inputs.Length; i++)
         {
             outputs[i] = exps[i] / sum;
@@ -449,11 +490,17 @@ public class NeuralNetwork
     }
 
     public static float[] SoftmaxDerivative(float[] inputs, float[] prevGradients) {
-        // Helpful to precompute these as opposed to recalculating exp a million times
+        // Find maximum input for numerical stability
+        float maxInput = inputs[0];
+        for (int i = 1; i < inputs.Length; i++) {
+            maxInput = Mathf.Max(maxInput, inputs[i]);
+        }
+
+        // Compute exponentials with numerical stability
         float[] exps = new float[inputs.Length];
         float s = 0;
         for (int i = 0; i < inputs.Length; i++) {
-            float exp = Mathf.Exp(inputs[i]);
+            float exp = Mathf.Exp(inputs[i] - maxInput);
             exps[i] = exp;
             s += exp;
         }

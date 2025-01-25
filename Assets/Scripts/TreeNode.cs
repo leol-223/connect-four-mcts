@@ -39,32 +39,22 @@ public class TreeNode {
     public float Q;     // average value = W / N
     public float prior; // policy prior (from NN or heuristic)
 
-    // For demonstration, we’ll define a constant for exploration:
+    // For demonstration, we'll define a constant for exploration:
     private const float C_PUCT = 1.4f;
 
     // Add lock object for thread safety
     private readonly object lockObject = new object();
+    private readonly object _networkLock = new object();
 
     // Add a thread-safe random number generator
     private static readonly ThreadLocal<System.Random> random = 
         new ThreadLocal<System.Random>(() => new System.Random(Interlocked.Increment(ref randomSeed)));
-    private static int randomSeed = Environment.TickCount;
+    private static int randomSeed = Environment.TickCount ^ Guid.NewGuid().GetHashCode();
 
-    // Replace UnityEngine.Random.Range with this method
-    private float RandomRange(float min, float max) {
-        return (float)(random.Value.NextDouble() * (max - min) + min);
-    }
-
-    public static float GenerateRandomNormal(float mean, float standardDeviation)
-    {
-        // Box-Muller transform with thread-safe random
-        float u1 = (float)random.Value.NextDouble(); // Uniform(0,1] random doubles
-        float u2 = (float)random.Value.NextDouble();
-        float standardNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) * Mathf.Sin(2.0f * Mathf.PI * u2);
-
-        // Scale and shift to match the specified mean and standard deviation
-        return mean + standardDeviation * standardNormal;
-    }
+    private const float EARLY_EXPLORE_FACTOR = 2.0f;
+    private const int EARLY_GAME_VISITS = 100;
+    private const int MIN_VISITS_BEFORE_COMMIT = 20;
+    private static bool useExplorationConstraints = true;
 
     public TreeNode(NeuralNetwork valueNetwork, NeuralNetwork policyNetwork, State state) {
         this.valueNetwork = valueNetwork;
@@ -78,13 +68,11 @@ public class TreeNode {
         List<int> possibleMoves = GetValidMoves();
         children = new List<TreeNode>();
 
-        float[] policy = policyNetwork.Evaluate(StateToInput(state));
-        // priors should add up to 1
-        // If the policy network is stupid (ie assigns 1/7 to everything) but not every move is possible then we've got a problem
+        float[] policy = EvaluatePolicy(StateToInput(state));
         float truePolicyVal = 0f;
 
-        for (int i = 0; i < possibleMoves.Count; i++)
-        {
+        // Add validation for NaN values
+        for (int i = 0; i < possibleMoves.Count; i++) {
             int move = possibleMoves[i];
             truePolicyVal += policy[move];
         }
@@ -98,16 +86,16 @@ public class TreeNode {
             child.redToPlay = !redToPlay;
             child.depth = depth + 1;
 
-            // Check terminal states
+            // Absolute eval
             if (HasConnectFour(childState.redBitboard))
             {
                 child.isTerminal = true;
-                child.eval = child.redToPlay ? -(100f + child.depth * 0.01f) : 100f + child.depth * 0.01f;
+                child.eval = 1f;
             }
             else if (HasConnectFour(childState.yellowBitboard))
             {
                 child.isTerminal = true;
-                child.eval = child.redToPlay ? 100f + child.depth * 0.01f : -(100f + child.depth * 0.01f);
+                child.eval = -1f;
             }
             else if (IsFull(childState))
             {
@@ -117,11 +105,8 @@ public class TreeNode {
             else
             {
                 float[] input = StateToInput(childState);
-                // for testing purposes, try to get it to prioritize placing everything in the third column
-                // it thinks it's good for red for more pieces to be in the middle (yellow or red)
-                // float nnValue = -(child.state.heights[3]*2f+child.state.heights[2]+child.state.heights[4]);
-                float nnValue = -valueNetwork.Evaluate(input)[0];
-                child.eval = child.redToPlay ? -nnValue : nnValue;
+                float rawEval = EvaluateValue(input);
+                child.eval = rawEval;
             }
 
             child.prior = policy[move] / truePolicyVal;
@@ -166,7 +151,7 @@ public class TreeNode {
     }
 
     public float[] StateToInput(State state) {
-        float[] result = new float[84];
+        float[] result = new float[85];
 
         // Match the exact same position calculation as ShowBoard
         for (int col = 0; col < 7; col++)
@@ -183,6 +168,10 @@ public class TreeNode {
                 result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
             }
         }
+
+        // Add parity as the 85th input (1.0 for red to play, 0.0 for yellow to play)
+        int totalPieces = state.heights.Sum();
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }
@@ -247,11 +236,10 @@ public class TreeNode {
 
     public void CreateChildrenWithRootNoise(float alpha, float epsilon)
     {
-        // Normal child creation logic:
-        CreateChildren(); // sets child.prior in some default way
-                          // e.g. from NN policy or uniform
+        CreateChildren();
 
-        if (alpha > 0) {
+        // Only apply noise if there's more than one child
+        if (alpha > 0 && children.Count > 1) {
             // Now blend in Dirichlet noise at the root:
             float[] noise = NoiseUtils.SampleDirichlet(children.Count, alpha);
 
@@ -269,97 +257,58 @@ public class TreeNode {
         if (isTerminal) {
             lock(lockObject) {
                 N += 1;
-                W += (float)eval;
+                W += eval ?? 0f;  // Use null coalescing operator
                 Q = W / N;
-                return (float)eval;
+                return eval ?? 0f;
             }
         }
 
-        if (children == null) {
-            lock(lockObject) {
-                // Double-check locking pattern
-                if (children == null) {
-                    if (isRootNode) {
-                        CreateChildren();
-                    } else {
-                        CreateChildrenWithRootNoise(rootNoise, dirichletAlpha);
-                    }
-
-                    foreach (var child in children) {
-                        if (child.isTerminal) {
-                            child.N = 1;
-                            child.W = (float)child.eval;
-                            child.Q = child.W / child.N;
-                        }
-                    }
-
-                    float value = 0f;
-                    if (!isTerminal) {
-                        float[] input = StateToInput(state);
-                        value = valueNetwork.Evaluate(input)[0];
-                        value = redToPlay ? -value : value;
-                    }
-                    W += value;
+        // First, ensure children are created under a lock
+        lock(lockObject) {
+            if (children == null) {
+                CreateChildrenWithRootNoise(rootNoise, dirichletAlpha);
+                
+                if (children.Count == 0) {
                     N += 1;
-                    Q = W / N;
-                    return value;
+                    return 0;
                 }
+
+                // Initialize all children at once
+                float[] input = StateToInput(state);
+                float initialValue = EvaluateValue(input);
+                
+                foreach (var child in children) {
+                    if (child.isTerminal) {
+                        child.N = 1;
+                        child.W = child.eval ?? 0f;
+                        child.Q = child.W;
+                    }
+                }
+
+                W += initialValue;
+                N += 1;
+                Q = W / N;
+                return initialValue;
             }
         }
 
+        // Take a snapshot of total visits under lock
         float totalVisits;
         lock(lockObject) {
             totalVisits = children.Sum(c => c.N);
         }
 
-        TreeNode bestChild = null;
-        float bestScore = float.NegativeInfinity;
-
-        // Add check for empty children list
-        if (children.Count == 0) {
-            lock(lockObject) {
-                W += 0;  // Draw value for a terminal state
-                N += 1;
-                Q = W / N;
-                return 0;
-            }
-        }
-
-        foreach (var c in children) {
-            float uct;
-            float childN, childQ, childPrior;
-            
-            lock(c.lockObject) {
-                childN = c.N;
-                childQ = c.Q;
-                childPrior = c.prior;
-            }
-
-            if (childN == 0) {
-                uct = c.isTerminal ? ((float)c.eval) : (C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1));
-            } else {
-                uct = C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1) / (1 + childN) + childQ;
-            }
-            
-            if (uct > bestScore) {
-                bestScore = uct;
-                bestChild = c;
-            }
-        }
-
-        // Add null check
+        // Select best child using our thread-safe selection
+        TreeNode bestChild = SelectBestChild(totalVisits);
         if (bestChild == null) {
-            Debug.LogError("No best child found - this shouldn't happen if children list is non-empty");
-            lock(lockObject) {
-                W += 0;
-                N += 1;
-                Q = W / N;
-                return 0;
-            }
+            Debug.LogError($"No best child found. Children count: {children?.Count ?? 0}");
+            return 0;
         }
 
-        float childValue = -bestChild.Search(rootNoise, dirichletAlpha);
+        // Perform the recursive search
+        float childValue = bestChild.Search(rootNoise, dirichletAlpha);
 
+        // Update statistics under lock
         lock(lockObject) {
             W += childValue;
             N += 1;
@@ -369,4 +318,83 @@ public class TreeNode {
         return childValue;
     }
 
+    private TreeNode SelectBestChild(float totalVisits)
+    {
+        TreeNode bestChild = null;
+        float bestScore = float.NegativeInfinity;
+        
+        // Take snapshot of children stats
+        var childStats = new List<(TreeNode child, float N, float Q, float prior, bool needsExploration)>();
+        
+        lock(lockObject) {
+            foreach (var child in children) {
+                lock(child.lockObject) {
+                    childStats.Add((
+                        child,
+                        child.N,
+                        redToPlay ? child.Q : -child.Q,
+                        child.prior,
+                        child.N < MIN_VISITS_BEFORE_COMMIT
+                    ));
+                }
+            }
+        }
+
+        // First, check if any child needs minimum exploration
+        var unexploredChildren = childStats.Where(c => useExplorationConstraints && c.needsExploration).ToList();
+        if (unexploredChildren.Any()) {
+            return unexploredChildren.OrderBy(c => c.N).First().child;
+        }
+
+        // Normal UCT selection
+        foreach (var (child, childN, childQ, childPrior, _) in childStats) {
+            float uct = GetUCTScore(childN, childQ, childPrior, totalVisits);
+            if (uct > bestScore) {
+                bestScore = uct;
+                bestChild = child;
+            }
+        }
+
+        return bestChild;
+    }
+
+    private float[] EvaluatePolicy(float[] input) {
+        lock(_networkLock) {
+            return policyNetwork.Evaluate(input);
+        }
+    }
+    
+    private float EvaluateValue(float[] input) {
+        lock(_networkLock) {
+            return valueNetwork.Evaluate(input)[0];
+        }
+    }
+
+    private float GetUCTScore(float childN, float childQ, float childPrior, float totalVisits)
+    {
+        // Ensure minimum exploration only if constraints are enabled
+        if (useExplorationConstraints && childN < MIN_VISITS_BEFORE_COMMIT) {
+            return float.MaxValue - (MIN_VISITS_BEFORE_COMMIT - childN);
+        }
+
+        float explorationTerm;
+        if (useExplorationConstraints && totalVisits < EARLY_GAME_VISITS) {
+            explorationTerm = C_PUCT * EARLY_EXPLORE_FACTOR * childPrior * Mathf.Sqrt(totalVisits + 1);
+        } else {
+            explorationTerm = C_PUCT * childPrior * Mathf.Sqrt(totalVisits + 1);
+        }
+
+        // Smooth early evaluations only if constraints are enabled
+        float visitTerm = 1 + childN + 1e-6f;
+        float exploitationTerm = useExplorationConstraints && childN < EARLY_GAME_VISITS ? 
+            childQ * (childN / EARLY_GAME_VISITS) : childQ;
+        
+        return exploitationTerm + explorationTerm / visitTerm;
+    }
+
+    // Add a public method to toggle the exploration constraints
+    public static void SetExplorationConstraints(bool enabled)
+    {
+        useExplorationConstraints = enabled;
+    }
 }

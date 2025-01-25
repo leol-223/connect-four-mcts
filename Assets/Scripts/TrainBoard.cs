@@ -14,6 +14,7 @@ public class TrainBoard : MonoBehaviour
     public NeuralNetwork policyNetwork;
     public int numGenerations;
     public int startGeneration;
+    public int generationIncrement;
     public int numGames;
     public int numEpochs;
     public int initialIterations;
@@ -28,12 +29,15 @@ public class TrainBoard : MonoBehaviour
     public float dirichletAlphaDecay;
     public float trainRatio;
     public float initialLearningRate = 0.001f;
-    public float learningRateDecay = 0.95f;
+    public float generationLearningRateDecay = 0.98f;
+    public float epochLearningRateDecay = 0.95f;
+    public float minTemperature = 0.2f;
 
     public TMPro.TMP_Text gamesDisplay;
     public TMPro.TMP_Text secondaryDisplay;
     public TMPro.TMP_Text generationText;
     public TMPro.TMP_Text thirdText;
+    public TMPro.TMP_Text statsText;
 
     private List<float[]> valueInputs;
     private List<float[]> valueOutputs;
@@ -49,11 +53,16 @@ public class TrainBoard : MonoBehaviour
     private List<float[]> policyTestInputs;
     private List<float[]> policyTestOutputs;
     private HashSet<BoardState> uniquePositions;
+    private int[] numPositions;
 
     private int epochCounter = 0;
     private int counter = 0;
     private int generationCounter = 0;
     private float startTime;
+
+    private int numRedWins;
+    private int numYellowWins;
+    private int numDraws;
 
     // Add this struct at the class level
     private struct BoardState : IEquatable<BoardState>
@@ -87,12 +96,18 @@ public class TrainBoard : MonoBehaviour
 
     void Start()
     {
+        TreeNode.SetExplorationConstraints(false);
+
+        numPositions = new int[42];
+        for (int i = 0; i < 42; i++) {
+            numPositions[i] = 0;
+        }
         valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
         policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
 
-        if (startGeneration > 0) {
-            valueNetwork.LoadNetwork(modelName+"-V" + startGeneration.ToString());
-            policyNetwork.LoadNetwork(modelName+"-P" + startGeneration.ToString());
+        if (startGeneration+generationIncrement > 0) {
+            valueNetwork.LoadNetwork(modelName+"-V" + (startGeneration+generationIncrement).ToString());
+            policyNetwork.LoadNetwork(modelName+"-P" + (startGeneration+generationIncrement).ToString());
             generationCounter = startGeneration;
         }
 
@@ -104,6 +119,10 @@ public class TrainBoard : MonoBehaviour
 
         startTime = Time.realtimeSinceStartup;
         uniquePositions = new HashSet<BoardState>();
+        
+        numRedWins = 0;
+        numYellowWins = 0;
+        numDraws = 0;
     }
 
     // Update is called once per frame
@@ -111,7 +130,7 @@ public class TrainBoard : MonoBehaviour
     {
         if (generationCounter < numGenerations)
         {
-            generationText.text = "Generation " + (generationCounter + 1).ToString();
+            generationText.text = "Generation " + (generationCounter + generationIncrement + 1).ToString();
             if (counter < numGames)
             {
                 int currentIterations = Mathf.Min(
@@ -119,10 +138,11 @@ public class TrainBoard : MonoBehaviour
                     Mathf.RoundToInt(initialIterations * Mathf.Pow(iterationsGrowthRate, generationCounter))
                 );
 
-                float temperature = initialTemperature * Mathf.Pow(temperatureDecay, generationCounter);
+                float temperature = Mathf.Max(
+                    minTemperature,
+                    initialTemperature * Mathf.Pow(temperatureDecay, generationCounter)
+                );
 
-                Debug.Log($"Temperature: {temperature}");
-                Debug.Log($"Num iterations: {currentIterations}");
 
                 secondaryDisplay.text = "Epoch 0: -";
 
@@ -139,6 +159,7 @@ public class TrainBoard : MonoBehaviour
                 BoardNN.Player winningPlayer;
                 BoardNN.Player currentPlayer = BoardNN.Player.Red;
 
+                int numPositionLocal = 0;
                 while (true)
                 {                
                     winningPlayer = board.GetWinningPlayer();
@@ -150,6 +171,7 @@ public class TrainBoard : MonoBehaviour
                     float[] position = GetPosition(board.redBitboard, board.yellowBitboard);
                     float[] symmetricalPosition = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
                     uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
+
 
                     int move;
                     if (currentPlayer == BoardNN.Player.Red)
@@ -184,26 +206,54 @@ public class TrainBoard : MonoBehaviour
                     policyOutputs.Add(promise);
                     policyInputs.Add(symmetricalPosition);
                     policyOutputs.Add(promise.Reverse().ToArray());
+
+                    // ShowBoardFromNNInput(position);
+                    // Debug.Log(valueNetwork.Evaluate(position)[0]);
+
+                    numPositionLocal += 1;
                 }
 
                 float[] output;
                 if (winningPlayer == BoardNN.Player.Red)
                 {
                     output = new float[1] { 1};
+                    numRedWins += 1;
                 }
                 else if (winningPlayer == BoardNN.Player.Yellow)
                 {
                     output = new float[1] { -1f};
+                    numYellowWins += 1;
                 }
                 else
                 {
                     output = new float[1] {0f};
+                    numDraws += 1;
                 }
-                Debug.Log(output[0]);
+
+                // Debug.Log(output[0]);
+
                 for (int i = 0; i < positions.Count; i++)
                 {
                     valueInputs.Add(positions[i]);
                     valueOutputs.Add(output);
+                }
+
+                numPositions[numPositionLocal-1] += 1;
+
+                int minIndex = -1; 
+                int maxIndex = -1;
+                int totalGames = 0;
+                int medianIndex = -1;
+
+                // First pass to find min, max, and total
+                for (int i = 0; i < 42; i++) {
+                    if (numPositions[i] > 0 && minIndex == -1) {
+                        minIndex = i;
+                    }
+                    if (numPositions[i] > 0) {
+                        maxIndex = i;
+                        totalGames += numPositions[i];
+                    }
                 }
 
                 counter += 1;
@@ -213,7 +263,18 @@ public class TrainBoard : MonoBehaviour
                 float timeLeft = timePerGame * (numGames - counter);
                 secondaryDisplay.text = " Time Left: ~" + Mathf.RoundToInt(timeLeft).ToString() + "s";
 
-                thirdText.text = $"{uniquePositions.Count} Unique Positions";
+                // Second pass to find median
+                int cumSum = 0;
+                int medianThreshold = totalGames / 2;
+                for (int i = 0; i < 42; i++) {
+                    cumSum += numPositions[i];
+                    if (cumSum > medianThreshold && medianIndex == -1) {
+                        medianIndex = i;
+                    }
+                }
+
+                thirdText.text = $"{uniquePositions.Count} Unique Positions | Med: {medianIndex+1} | Range: {minIndex+1} - {maxIndex+1}";
+                statsText.text = $"<color=#b31414>{numRedWins} red</color> | <color=#636262>{numDraws} draw</color> | <color=#959711>{numYellowWins} yellow</color>";
             }
             else if (epochCounter < numEpochs)
             {
@@ -234,7 +295,10 @@ public class TrainBoard : MonoBehaviour
 
                 Debug.Log($"Training data length: {valueTrainInputs.Count}, Testing data length: {valueTestInputs.Count}");
                 
-                float currentLearningRate = initialLearningRate * Mathf.Pow(learningRateDecay, epochCounter);
+                // Base learning rate decays with generations
+                float generationAdjustedLR = initialLearningRate * Mathf.Pow(generationLearningRateDecay, generationCounter);
+                // Further decay within epochs
+                float currentLearningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
 
                 valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 128);
                 policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate * 2f, 128);
@@ -250,27 +314,36 @@ public class TrainBoard : MonoBehaviour
             else
             {
                 generationCounter += 1;
-                valueNetwork.SaveNetwork(modelName+"-V" + generationCounter.ToString());
-                policyNetwork.SaveNetwork(modelName+"-P" + generationCounter.ToString());
+                valueNetwork.SaveNetwork(modelName+"-V" + (generationCounter+generationIncrement).ToString());
+                policyNetwork.SaveNetwork(modelName+"-P" + (generationCounter+generationIncrement).ToString());
 
                 valueInputs.Clear();
                 valueOutputs.Clear();
                 policyInputs.Clear();
                 policyOutputs.Clear();
                 uniquePositions.Clear();
+
+                numRedWins = 0;
+                numDraws = 0;
+                numYellowWins = 0;
                 
                 epochCounter = 0;
                 counter = 0;
                 startTime = Time.realtimeSinceStartup;
+
+                for (int i = 0; i < 42; i++) {
+                    numPositions[i] = 0;
+                }
             }
         }
     }
 
     public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        // Create the output array for 84 floats (42 for red, 42 for yellow)
-        float[] result = new float[84];
+        // Create the output array for 85 floats (42 for red, 42 for yellow, 1 for parity)
+        float[] result = new float[85];
 
+        int totalPieces = 0;
         // Match the exact same position calculation as ShowBoard
         for (int col = 0; col < 7; col++)
         {
@@ -284,8 +357,13 @@ public class TrainBoard : MonoBehaviour
                 
                 result[nnPosition] = isRed ? 1.0f : 0.0f;
                 result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
+
+                if (isRed || isYellow) totalPieces++;
             }
         }
+
+        // Add parity as the 85th input (1.0 for red to play, 0.0 for yellow to play)
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }
@@ -294,7 +372,7 @@ public class TrainBoard : MonoBehaviour
     {
         // First get the neural network input representation
         float[] nnInput = GetPosition(redBitboard, yellowBitboard);
-        float[] symmetricInput = new float[84];
+        float[] symmetricInput = new float[85];
 
         // For each row
         for (int row = 0; row < 6; row++)
@@ -314,13 +392,20 @@ public class TrainBoard : MonoBehaviour
             }
         }
 
+        // Copy the parity bit (doesn't change with symmetry)
+        symmetricInput[84] = nnInput[84];
+
         return symmetricInput;
     }
 
     public static void ShowBoardFromNNInput(float[] nnInput)
     {
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
-        sb.AppendLine("Board State from NN Input:");
+        if (nnInput[84] == 1) {
+            sb.AppendLine("Board State from NN Input (R):");
+        } else {
+            sb.AppendLine("Board State from NN Input (Y):");
+        }
         sb.AppendLine("-----------------------------");
         
         // Print from top to bottom
