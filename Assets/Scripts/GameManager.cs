@@ -24,8 +24,6 @@ public class GameManager : MonoBehaviour
     public float dropHeight;
     public string valuePath;
     public string policyPath;
-    public int[] valueShape;
-    public int[] policyShape;
     public NeuralNetwork valueNetwork;
     public NeuralNetwork policyNetwork;
     public float temperature;
@@ -51,7 +49,7 @@ public class GameManager : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        TreeNode.SetExplorationConstraints(true);
+        TreeNode.SetExplorationConstraints(false);
 
         if (!aiPlayers.Contains(Board.Player.Red))
         {
@@ -64,11 +62,77 @@ public class GameManager : MonoBehaviour
         board = new BoardNN();
         rootNode = null;
 
-        this.valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
-        this.policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+        valueNetwork = new NeuralNetwork(NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
 
-        this.valueNetwork.LoadNetwork(valuePath);
-        this.policyNetwork.LoadNetwork(policyPath);
+        // Value Network
+        valueNetwork.AddConvolutionalLayer(
+            inputDepth: 2,
+            inputHeight: 6,
+            inputWidth: 7,
+            numFilters: 32,     // Increased from 16 to 32 filters
+            filterSize: 3,
+            stride: 1,
+            usePadding: true,
+            activation: Activation.LeakyReLU
+        );
+        
+        valueNetwork.AddPoolingLayer(
+            inputDepth: 32,
+            inputHeight: 6,
+            inputWidth: 7,
+            poolSize: 2,
+            stride: 2
+        );
+
+        valueNetwork.AddDenseLayer(
+            inputSize: 32 * 3 * 3,
+            outputSize: 64,     // Increased from 32 to 64
+            activation: Activation.LeakyReLU
+        );
+
+        valueNetwork.AddDenseLayer(
+            inputSize: 64,
+            outputSize: 1,
+            activation: Activation.Tanh
+        );
+
+        // Mirror for policy network
+        policyNetwork = new NeuralNetwork(NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+
+        // Policy Network
+        policyNetwork.AddConvolutionalLayer(
+            inputDepth: 2,
+            inputHeight: 6,
+            inputWidth: 7,
+            numFilters: 32,     // Increased to match value network
+            filterSize: 3,
+            stride: 1,
+            usePadding: true,
+            activation: Activation.LeakyReLU
+        );
+        
+        policyNetwork.AddPoolingLayer(
+            inputDepth: 32,
+            inputHeight: 6,
+            inputWidth: 7,
+            poolSize: 2,
+            stride: 2
+        );
+
+        policyNetwork.AddDenseLayer(
+            inputSize: 32 * 3 * 3,
+            outputSize: 64,     // Increased to match value network
+            activation: Activation.LeakyReLU
+        );
+
+        policyNetwork.AddDenseLayer(
+            inputSize: 64,
+            outputSize: 7,
+            activation: Activation.Softmax
+        );
+
+        valueNetwork.LoadNetwork(valuePath);
+        policyNetwork.LoadNetwork(policyPath);
 
         board.valueNetwork = valueNetwork;
         board.policyNetwork = policyNetwork;
@@ -107,16 +171,17 @@ public class GameManager : MonoBehaviour
                             }
 
                             try {
-                                Parallel.For(0, 800, i => {
+                                Parallel.For(0, 100, i => {
                                     rootNode.Search(0, 0);
                                 });
-                                currentIter += 800;
+                                currentIter += 100;
                             }
                             catch (AggregateException ae) {
                                 Debug.LogError($"Parallel search failed: {ae.Message}");
                             }
 
                             BoardNN.MoveEval move = board.BestMove(rootNode, temperature);
+                            Debug.Log(string.Join(",", board.promise));
 
                             DebugSearchStatistics(rootNode);
                             ShowPointer(currentPlayer, move.Move);

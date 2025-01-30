@@ -90,12 +90,12 @@ public class TreeNode {
             if (HasConnectFour(childState.redBitboard))
             {
                 child.isTerminal = true;
-                child.eval = 1f;
+                child.eval = 1f * Mathf.Pow(0.99f, childState.heights.Sum());
             }
             else if (HasConnectFour(childState.yellowBitboard))
             {
                 child.isTerminal = true;
-                child.eval = -1f;
+                child.eval = -1f * Mathf.Pow(0.99f, childState.heights.Sum());
             }
             else if (IsFull(childState))
             {
@@ -151,15 +151,14 @@ public class TreeNode {
     }
 
     public float[] StateToInput(State state) {
-        float[] result = new float[85];
+        float[] result = new float[84];
 
-        // Match the exact same position calculation as ShowBoard
-        for (int col = 0; col < 7; col++)
+        for (int row = 0; row < 6; row++)
         {
-            for (int row = 0; row < 6; row++)
+            for (int col = 0; col < 7; col++)
             {
                 int bitPosition = 8 * col + row;
-                int nnPosition = col * 6 + row;
+                int nnPosition = row * 7 + col;  // Row-major ordering
                 
                 bool isRed = (state.redBitboard & ((ulong)1 << bitPosition)) != 0;
                 bool isYellow = (state.yellowBitboard & ((ulong)1 << bitPosition)) != 0;
@@ -168,10 +167,6 @@ public class TreeNode {
                 result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
             }
         }
-
-        // Add parity as the 85th input (1.0 for red to play, 0.0 for yellow to play)
-        int totalPieces = state.heights.Sum();
-        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }

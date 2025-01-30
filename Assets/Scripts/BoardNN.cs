@@ -100,6 +100,10 @@ public class BoardNN
         float bestVisits = -1f;
         float totalVisits = 0;
 
+        for (int i = 0; i < 7; i++) {
+            promise[i] = 0;
+        }
+
         foreach (var child in rootNode.children) {
             promise[child.priorMove] = child.N;
             totalVisits += child.N;
@@ -139,30 +143,35 @@ public class BoardNN
             }
         }
 
-        maxDepth = rootNode.GetMaxDepth();
-
         // Calculate promises (visit counts)
         TreeNode bestChild = null;
         float bestVisits = -1f;
         float totalVisits = 0f;
     
+        // Zero out promises first
+        for (int i = 0; i < 7; i++) {
+            promise[i] = 0f;
+        }
+
         foreach (var child in rootNode.children) {
-            totalVisits += child.N;
+            totalVisits += (float)child.N;
             promise[child.priorMove] = (float)child.N;
             if (child.N > bestVisits) {
                 bestVisits = child.N;
                 bestChild = child;
             }
         }
-
         // Normalize promises
         for (int i = 0; i < 7; i++) {
-            promise[i] /= totalVisits;
+            promise[i] /= (float)totalVisits;
         }
 
         // Apply temperature scaling to visit counts
         float[] probs = new float[7];
         float sum = 0;
+        for (int i = 0; i < 7; i++) {
+            probs[i] = 0;
+        }
         for (int i = 0; i < rootNode.children.Count; i++) {
             probs[rootNode.children[i].priorMove] = Mathf.Pow(rootNode.children[i].N, 1/temperature);
             sum += probs[rootNode.children[i].priorMove];

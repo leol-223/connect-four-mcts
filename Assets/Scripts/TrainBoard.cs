@@ -4,12 +4,11 @@ using System;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
+using UnityEngine.Profiling;
 
 public class TrainBoard : MonoBehaviour
 {
     // Start is called once before the first execution of Update after the MonoBehaviour is created
-    public int[] valueShape;
-    public int[] policyShape;
     public NeuralNetwork valueNetwork;
     public NeuralNetwork policyNetwork;
     public int numGenerations;
@@ -39,6 +38,22 @@ public class TrainBoard : MonoBehaviour
     public TMPro.TMP_Text thirdText;
     public TMPro.TMP_Text statsText;
 
+    public TMPro.TMP_Text sideDisplayMainText;
+    public TMPro.TMP_Text sideDisplaySecondaryText;
+
+    public GameObject maskPrefab;
+    public GameObject tokenPrefab;
+    public GameObject boardPrefab;
+    public GameObject pointerPrefab;
+
+    public Color redColor;
+    public Color yellowColor;
+    public Color redPointerColor;
+    public Color yellowPointerColor;
+
+    private GameObject pointer;
+    private GameObject pointer2;
+    private List<GameObject> tokens;
     private List<float[]> valueInputs;
     private List<float[]> valueOutputs;
     private List<float[]> policyInputs;
@@ -102,8 +117,77 @@ public class TrainBoard : MonoBehaviour
         for (int i = 0; i < 42; i++) {
             numPositions[i] = 0;
         }
-        valueNetwork = new NeuralNetwork(valueShape, NeuralNetwork.ReLU, NeuralNetwork.Tanh, NeuralNetwork.ReLUDerivative, NeuralNetwork.TanhDerivative, NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
-        policyNetwork = new NeuralNetwork(policyShape, NeuralNetwork.ReLU, NeuralNetwork.Softmax, NeuralNetwork.ReLUDerivative, NeuralNetwork.SoftmaxDerivative, NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+
+        valueNetwork = new NeuralNetwork(NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
+
+        // Value Network
+        valueNetwork.AddConvolutionalLayer(
+            inputDepth: 2,    // One channel each for red and yellow pieces
+            inputHeight: 6,   // 6 rows
+            inputWidth: 7,    // 7 columns
+            numFilters: 16,
+            filterSize: 3,
+            stride: 1,
+            usePadding: true,
+            activation: Activation.LeakyReLU
+        );
+        
+        valueNetwork.AddPoolingLayer(
+            inputDepth: 16,
+            inputHeight: 6,
+            inputWidth: 7,
+            poolSize: 2,
+            stride: 2
+        );
+
+        // Add an intermediate dense layer
+        valueNetwork.AddDenseLayer(
+            inputSize: 16 * 3 * 3,
+            outputSize: 64,     // Wider first dense layer
+            activation: Activation.LeakyReLU
+        );
+
+        // Add residual connection by concatenating with previous layer output
+        valueNetwork.AddDenseLayer(
+            inputSize: 64,
+            outputSize: 1,
+            activation: Activation.Tanh
+        );
+
+        // Mirror for policy network
+        policyNetwork = new NeuralNetwork(NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+
+        // Policy Network
+        policyNetwork.AddConvolutionalLayer(
+            inputDepth: 2,
+            inputHeight: 6,
+            inputWidth: 7,
+            numFilters: 16,
+            filterSize: 3,
+            stride: 1,
+            usePadding: true,
+            activation: Activation.LeakyReLU
+        );
+        
+        policyNetwork.AddPoolingLayer(
+            inputDepth: 16,
+            inputHeight: 6,
+            inputWidth: 7,
+            poolSize: 2,
+            stride: 2
+        );
+
+        policyNetwork.AddDenseLayer(
+            inputSize: 16 * 3 * 3,
+            outputSize: 64,
+            activation: Activation.LeakyReLU
+        );
+
+        policyNetwork.AddDenseLayer(
+            inputSize: 64,
+            outputSize: 7,
+            activation: Activation.Softmax
+        );
 
         if (startGeneration+generationIncrement > 0) {
             valueNetwork.LoadNetwork(modelName+"-V" + (startGeneration+generationIncrement).ToString());
@@ -123,6 +207,43 @@ public class TrainBoard : MonoBehaviour
         numRedWins = 0;
         numYellowWins = 0;
         numDraws = 0;
+
+        // Right shift to fit game display view on left
+        RectTransform gamesRect = gamesDisplay.GetComponent<RectTransform>();
+        // Add 5,000 cause text width is 10,000
+        gamesRect.anchoredPosition = new Vector2(150f+5000f, gamesRect.anchoredPosition.y);
+        gamesDisplay.alignment = TMPro.TextAlignmentOptions.Left;
+        
+        RectTransform secondaryRect = secondaryDisplay.GetComponent<RectTransform>();
+        secondaryRect.anchoredPosition = new Vector2(150f+5000f, secondaryRect.anchoredPosition.y);
+        secondaryDisplay.alignment = TMPro.TextAlignmentOptions.Left;
+
+        RectTransform generationRect = generationText.GetComponent<RectTransform>();
+        // Add 5,000 cause text width is 10,000
+        generationRect.anchoredPosition = new Vector2(150f+5000f, generationRect.anchoredPosition.y);
+        generationText.alignment = TMPro.TextAlignmentOptions.Left;
+        
+        RectTransform thirdRect = thirdText.GetComponent<RectTransform>();
+        thirdRect.anchoredPosition = new Vector2(150f+5000f, thirdRect.anchoredPosition.y);
+        thirdText.alignment = TMPro.TextAlignmentOptions.Left;
+
+        RectTransform statsRect = statsText.GetComponent<RectTransform>();
+        // Add 5,000 cause text width is 10,000
+        statsRect.anchoredPosition = new Vector2(150f+5000f, statsRect.anchoredPosition.y);
+        statsText.alignment = TMPro.TextAlignmentOptions.Left;
+
+        RectTransform sideDisplayRect = sideDisplayMainText.GetComponent<RectTransform>();
+        Vector3 worldPosition = new Vector3(-3.3f, -2.2f, 0f); // Use the same x-coordinate as your game object
+        Vector3 screenPosition = Camera.main.WorldToScreenPoint(worldPosition);
+        sideDisplayRect.position = screenPosition;
+
+        RectTransform sideDisplayRect2 = sideDisplaySecondaryText.GetComponent<RectTransform>();
+        Vector3 worldPosition2causeunityisalittlebitchandwontletmeusethesamevariablenametwice = new Vector3(-3.3f, -2.8f, 0f); // Use the same x-coordinate as your game object
+        Vector3 screenPosition2 = Camera.main.WorldToScreenPoint(worldPosition2causeunityisalittlebitchandwontletmeusethesamevariablenametwice);
+        sideDisplayRect2.position = screenPosition2;
+
+        tokens = new List<GameObject>();
+        CreateEmptyBoard();
     }
 
     // Update is called once per frame
@@ -156,10 +277,13 @@ public class TrainBoard : MonoBehaviour
                 board.dirichletAlpha = currentAlpha;
 
                 List<float[]> positions = new List<float[]>();
+                List<float[]> promises = new List<float[]>();
                 BoardNN.Player winningPlayer;
                 BoardNN.Player currentPlayer = BoardNN.Player.Red;
+                bool debuggedOutput = false;
 
-                int numPositionLocal = 0;
+                int positionCount = 0;
+
                 while (true)
                 {                
                     winningPlayer = board.GetWinningPlayer();
@@ -172,6 +296,14 @@ public class TrainBoard : MonoBehaviour
                     float[] symmetricalPosition = GetSymmetricalPosition(board.redBitboard, board.yellowBitboard);
                     uniquePositions.Add(new BoardState(board.redBitboard, board.yellowBitboard));
 
+                    HashSet<int> fullChildren = new HashSet<int>();
+
+                    for (int i = 0; i < 7; i++) {
+                        if (board.heights[i] == 6) {
+                            fullChildren.Add(i);
+                            break;
+                        }
+                    }
 
                     int move;
                     if (currentPlayer == BoardNN.Player.Red)
@@ -189,39 +321,45 @@ public class TrainBoard : MonoBehaviour
                         currentPlayer = BoardNN.Player.Red;
                     }
                     
-                    positions.Add(position);
-                    if (position != symmetricalPosition) {
-                        positions.Add(symmetricalPosition);
-                    }
-                    
                     float[] promise = new float[7];
-                    
-                    // Normalize promises and explicitly zero out illegal moves
-                    float sum = 0;
                     for (int i = 0; i < 7; i++) {
                         promise[i] = board.promise[i];
+                        if (fullChildren.Contains(i) && promise[i] > 0) {
+                            Debug.Log($"Error encountered at child {i}, value {promise[i]}");
+                            ShowBoardFromNNInput(position);
+                        }
                     }
                     
+                    positions.Add(position);
+
+                    promises.Add(promise);
                     policyInputs.Add(position);
                     policyOutputs.Add(promise);
-                    policyInputs.Add(symmetricalPosition);
-                    policyOutputs.Add(promise.Reverse().ToArray());
+                    
+                    if (position != symmetricalPosition) {
+                        policyInputs.Add(symmetricalPosition);
+                        policyOutputs.Add(promise.Reverse().ToArray());
+                        positions.Add(symmetricalPosition);
+                        promises.Add(promise.Reverse().ToArray());
+                    }
 
-                    // ShowBoardFromNNInput(position);
-                    // Debug.Log(valueNetwork.Evaluate(position)[0]);
-
-                    numPositionLocal += 1;
+                    positionCount += 1;
                 }
 
+                numPositions[positionCount - 1] += 1;
+
                 float[] output;
+                int moveCount = positionCount; // This represents how many moves it took
+                float discount = Mathf.Pow(0.99f, moveCount);
+                
                 if (winningPlayer == BoardNN.Player.Red)
                 {
-                    output = new float[1] { 1};
+                    output = new float[1] { 1f * discount };
                     numRedWins += 1;
                 }
                 else if (winningPlayer == BoardNN.Player.Yellow)
                 {
-                    output = new float[1] { -1f};
+                    output = new float[1] { -1f * discount };
                     numYellowWins += 1;
                 }
                 else
@@ -230,7 +368,54 @@ public class TrainBoard : MonoBehaviour
                     numDraws += 1;
                 }
 
-                // Debug.Log(output[0]);
+                if (debuggedOutput) {
+                    Debug.Log(output[0]);
+                }
+
+                int randomPositionIndex;
+                randomPositionIndex = UnityEngine.Random.Range(0, positions.Count-1);
+                float[] randomPosition = positions[randomPositionIndex];
+                DisplayPosition(randomPosition);
+                // Count total pieces to determine whose turn it is
+                int totalPieces = 0;
+                for (int i = 0; i < 84; i++) {
+                    if (randomPosition[i] > 0.5f) totalPieces++;
+                }
+                
+                float[] policy = policyNetwork.Evaluate(randomPosition);
+                float[] truePolicy = promises[randomPositionIndex];
+
+                int maxIndex2 = 0;
+                float maxValue2 = 0;
+                int maxIndex3 = 0;
+                float maxValue3 = 0;
+                for (int i = 0; i < 7; i++) {
+                    if (policy[i] > maxValue2) {
+                        maxValue2 = policy[i];
+                        maxIndex2 = i;
+                    }
+                    if (truePolicy[i] > maxValue3) {
+                        maxValue3 = truePolicy[i];
+                        maxIndex3 = i;
+                    }
+                }
+                if (totalPieces % 2 == 0) {
+                    sideDisplayMainText.color = redColor;
+                    sideDisplayMainText.text = "Red to play";
+                    DisplayPointer(BoardNN.Player.Red, maxIndex2, 0.8f);
+                    DisplayPointer2(BoardNN.Player.Red, maxIndex3, 0.5f);
+                } else {
+                    // other yellow is too bright against white
+                    sideDisplayMainText.color = new Color(182f/255f, 161f/255f, 27f/255f);
+                    sideDisplayMainText.text = "Yellow to play";
+                    DisplayPointer(BoardNN.Player.Yellow, maxIndex2, 0.8f);
+                    DisplayPointer2(BoardNN.Player.Yellow, maxIndex3, 0.5f);
+                }
+                float evaluation = valueNetwork.Evaluate(randomPosition)[0];
+                
+                string evalSign = evaluation > 0 ? "+" : "";
+                string outSign = output[0] > 0 ? "+" : "";
+                sideDisplaySecondaryText.text = $"Eval: {evalSign}{evaluation:F4}\nOutcome: {outSign}{output[0]:F4}";
 
                 for (int i = 0; i < positions.Count; i++)
                 {
@@ -238,7 +423,6 @@ public class TrainBoard : MonoBehaviour
                     valueOutputs.Add(output);
                 }
 
-                numPositions[numPositionLocal-1] += 1;
 
                 int minIndex = -1; 
                 int maxIndex = -1;
@@ -300,8 +484,8 @@ public class TrainBoard : MonoBehaviour
                 // Further decay within epochs
                 float currentLearningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
 
-                valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 128);
-                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate * 2f, 128);
+                valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 64);
+                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate, 64);
 
                 float cost1 = valueNetwork.CalculateCost(valueTestInputs, valueTestOutputs);
                 float cost2 = policyNetwork.CalculateCost(policyTestInputs, policyTestOutputs);
@@ -309,7 +493,7 @@ public class TrainBoard : MonoBehaviour
                 epochCounter += 1;
                 Debug.Log("Value cost: " + cost1.ToString());
                 Debug.Log("Policy cost: " + cost2.ToString());
-                secondaryDisplay.text = "Epoch " + epochCounter.ToString() + " | Value cost: " + cost1.ToString("F4") + " | Policy cost: " + cost2.ToString("F4");
+                secondaryDisplay.text = "Epoch " + epochCounter.ToString() + " | V: " + cost1.ToString("F4") + " | P: " + cost2.ToString("F4");
             }
             else
             {
@@ -340,30 +524,22 @@ public class TrainBoard : MonoBehaviour
 
     public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        // Create the output array for 85 floats (42 for red, 42 for yellow, 1 for parity)
-        float[] result = new float[85];
+        float[] result = new float[84];
 
-        int totalPieces = 0;
-        // Match the exact same position calculation as ShowBoard
-        for (int col = 0; col < 7; col++)
+        for (int row = 0; row < 6; row++)
         {
-            for (int row = 0; row < 6; row++)
+            for (int col = 0; col < 7; col++)
             {
                 int bitPosition = 8 * col + row;
-                int nnPosition = col * 6 + row;
+                int nnPosition = row * 7 + col;  // Row-major ordering
                 
                 bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
                 bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
                 
                 result[nnPosition] = isRed ? 1.0f : 0.0f;
                 result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
-
-                if (isRed || isYellow) totalPieces++;
             }
         }
-
-        // Add parity as the 85th input (1.0 for red to play, 0.0 for yellow to play)
-        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }
@@ -372,7 +548,7 @@ public class TrainBoard : MonoBehaviour
     {
         // First get the neural network input representation
         float[] nnInput = GetPosition(redBitboard, yellowBitboard);
-        float[] symmetricInput = new float[85];
+        float[] symmetricInput = new float[84];
 
         // For each row
         for (int row = 0; row < 6; row++)
@@ -380,9 +556,9 @@ public class TrainBoard : MonoBehaviour
             // For each column
             for (int col = 0; col < 7; col++)
             {
-                // Calculate source and target indices
-                int sourceIndex = col * 6 + row;
-                int targetIndex = (6 - col) * 6 + row;  // Flip column horizontally
+                // Calculate source and target indices using row-major ordering
+                int sourceIndex = row * 7 + col;
+                int targetIndex = row * 7 + (6 - col);  // Flip column horizontally
 
                 // Copy red pieces (first 42 values)
                 symmetricInput[targetIndex] = nnInput[sourceIndex];
@@ -392,20 +568,13 @@ public class TrainBoard : MonoBehaviour
             }
         }
 
-        // Copy the parity bit (doesn't change with symmetry)
-        symmetricInput[84] = nnInput[84];
-
         return symmetricInput;
     }
 
     public static void ShowBoardFromNNInput(float[] nnInput)
     {
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
-        if (nnInput[84] == 1) {
-            sb.AppendLine("Board State from NN Input (R):");
-        } else {
-            sb.AppendLine("Board State from NN Input (Y):");
-        }
+        sb.AppendLine("Board State from NN Input:");
         sb.AppendLine("-----------------------------");
         
         // Print from top to bottom
@@ -433,5 +602,122 @@ public class TrainBoard : MonoBehaviour
         sb.AppendLine("  1   2   3   4   5   6   7  ");
         
         Debug.Log(sb.ToString());
+    }
+
+    void CreateEmptyBoard() {
+        float boardPadding = 0.1f;
+        float boardScale = 0.75f;
+        float xOffset = -3.3f;
+        float yOffset = 0.7f;
+
+        GameObject boardObject = Instantiate(boardPrefab);
+        boardObject.transform.position = new Vector2(xOffset, yOffset);
+        boardObject.transform.localScale = new Vector2(7 * boardScale + boardPadding * boardScale, 6 * boardScale + boardPadding * boardScale);
+
+        GameObject collider = Instantiate(boardPrefab);
+        collider.transform.position = new Vector2(xOffset, yOffset -(6 * boardScale) / 2f - 0.05f * boardScale);
+        collider.transform.localScale = new Vector2(7 * boardScale + boardPadding * boardScale, 0.1f * boardScale);
+        collider.AddComponent<BoxCollider2D>();
+        // boardScale = size of one cell
+        for (int i = 0; i < 7; i++)
+        {
+            for (int j = 0; j < 6; j++)
+            {
+                GameObject maskObject = Instantiate(maskPrefab);
+                maskObject.transform.position = new Vector2((i - 3f) * boardScale + xOffset, (j - 2.5f) * boardScale + yOffset);
+                float scale = Mathf.Lerp(boardScale, 0, boardPadding);
+                maskObject.transform.localScale = new Vector2(scale, scale);
+            }
+        }
+    }
+
+    void ClearBoard() {
+        for (int i = 0; i < tokens.Count; i++) {
+            Destroy(tokens[i]);
+        }
+        tokens.Clear();
+    }
+
+    void DrawToken(int x, int y, bool isRed) {
+        GameObject token = Instantiate(tokenPrefab);
+
+        float boardScale = 0.75f;
+        float boardPadding = 0.1f;
+        float xOffset = -3.3f;
+        float yOffset = 0.7f;
+
+        token.transform.position = new Vector2((x - 3f) * boardScale + xOffset, (y - 2.5f) * boardScale + yOffset);
+        float scale = Mathf.Lerp(boardScale, 0, boardPadding);
+        token.transform.localScale = new Vector2(scale, scale);
+
+        if (isRed)
+        {
+            token.GetComponent<SpriteRenderer>().color = redColor;
+        }
+        else
+        {
+            token.GetComponent<SpriteRenderer>().color = yellowColor;
+        }
+
+        tokens.Add(token);
+    }
+
+    void DisplayPosition(float[] nnInput) {
+        ClearBoard();  // Clear existing tokens first
+        
+        // For each row
+        for (int row = 0; row < 6; row++) {
+            // For each column
+            for (int col = 0; col < 7; col++) {
+                // Calculate position in the NN input array using row-major ordering
+                int index = (row * 7) + col;
+                
+                // Check both red and yellow arrays
+                bool isRed = nnInput[index] > 0.5f;
+                bool isYellow = nnInput[index + 42] > 0.5f;
+                
+                if (isRed) {
+                    DrawToken(col, row, true);
+                } else if (isYellow) {
+                    DrawToken(col, row, false);
+                }
+            }
+        }
+    }
+
+    public void DisplayPointer(BoardNN.Player player, int position, float alpha) {
+        if (pointer == null)
+        {
+            pointer = Instantiate(pointerPrefab);
+        }
+        if (player == BoardNN.Player.Red)
+        {
+            pointer.GetComponent<SpriteRenderer>().color = new Color(redPointerColor.r, redPointerColor.g, redPointerColor.b, alpha);
+        }
+        else {
+            pointer.GetComponent<SpriteRenderer>().color = new Color(yellowPointerColor.r, yellowPointerColor.g, yellowPointerColor.b, alpha);
+        }
+        float xPos = ColumnToX(position);
+        pointer.transform.position = new Vector2(xPos, -1.85f);
+    }
+
+    public void DisplayPointer2(BoardNN.Player player, int position, float alpha) {
+        if (pointer2 == null)
+        {
+            pointer2 = Instantiate(pointerPrefab);
+        }
+        if (player == BoardNN.Player.Red)
+        {
+            pointer2.GetComponent<SpriteRenderer>().color = new Color(redPointerColor.r, redPointerColor.g, redPointerColor.b, alpha);
+        }
+        else {
+            pointer2.GetComponent<SpriteRenderer>().color = new Color(yellowPointerColor.r, yellowPointerColor.g, yellowPointerColor.b, alpha);
+        }
+        float xPos = ColumnToX(position);
+        pointer2.transform.position = new Vector2(xPos, -1.85f);
+    }
+
+    float ColumnToX(int column) {
+        return (column - 3f) * 0.75f - 3.3f;
     }
 }

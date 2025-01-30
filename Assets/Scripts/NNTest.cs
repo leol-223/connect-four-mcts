@@ -27,9 +27,18 @@ public class NNTest : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        nn = new NeuralNetwork(shape, NeuralNetwork.LeakyReLU, NeuralNetwork.Softmax, 
-            NeuralNetwork.LeakyReLUDerivative, NeuralNetwork.SoftmaxDerivative, 
+        nn = new NeuralNetwork(
             NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
+
+        // Assuming shape is your array of layer sizes, e.g., [64, 32, 16, 4]
+        for (int i = 0; i < shape.Length - 1; i++) {
+            nn.AddDenseLayer(
+                inputSize: shape[i],
+                outputSize: shape[i + 1],
+                activation: i == shape.Length - 2 ? Activation.Softmax : Activation.LeakyReLU
+            );
+        }
+            
         gamesDisplay.text = "";
         secondaryDisplay.text = "";
         generationText.text = "";
@@ -121,9 +130,6 @@ public class NNTest : MonoBehaviour
         
         // Number of full rotations the spiral makes (0 -> maxRadius).
         int turns = 2;
-        
-        // Maximum radius of the spiral (set to 1 for the [-1,1] x/y range).
-        float maxRadius = 1f;
 
         float r = Mathf.Sqrt(x*x + y*y);
         float theta = Mathf.Atan2(y, x);
