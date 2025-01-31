@@ -553,19 +553,20 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 521257614}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ef74e92ed7bcd4eabbfbcc8c157f569a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  learningRate: 0.005
   gamesDisplay: {fileID: 687380570}
   secondaryDisplay: {fileID: 893634495}
   generationText: {fileID: 935622201}
   thirdText: {fileID: 578831635}
   statsText: {fileID: 25838744}
-  numIterationsPerUpdate: 2000
-  maxIterations: 30000
+  numIterationsPerUpdate: 20000
+  maxIterations: 1000000
+  activeColor: {r: 0.21568628, g: 0.19607843, b: 0.18431373, a: 1}
+  inactiveColor: {r: 0.85882354, g: 0.78431374, b: 0.6862745, a: 1}
 --- !u!4 &521257616
 Transform:
   m_ObjectHideFlags: 0
@@ -593,16 +594,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8a99cefb478e04c72bfc7e25e936eefd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  shape: 02000000200000002000000002000000
-  learningRate: 0.005
   gamesDisplay: {fileID: 687380570}
   secondaryDisplay: {fileID: 893634495}
   generationText: {fileID: 935622201}
   thirdText: {fileID: 578831635}
   statsText: {fileID: 25838744}
-  numIterationsPerUpdate: 2000
-  maxIterations: 30000
-  quadResolution: 300
+  numIterationsPerUpdate: 5000
+  maxIterations: 1000000
+  quadResolution: 200
   activeColor: {r: 0.7830189, g: 0.12927197, b: 0.12927197, a: 1}
   inactiveColor: {r: 0.495283, g: 0.58527136, b: 1, a: 1}
 --- !u!1 &578831633
@@ -1296,30 +1295,30 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1016246472}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: bae2ff9601fdf4e5c96709de95e97ccc, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  numGenerations: 50
+  numGenerations: 1
   startGeneration: 0
   generationIncrement: 0
-  numGames: 500
-  numEpochs: 8
-  initialIterations: 200
-  iterationsGrowthRate: 1.03
+  numGames: 100
+  numEpochs: 10
+  initialIterations: 100
+  iterationsGrowthRate: 1.05
   maxIterations: 400
-  modelName: Metal
+  modelName: Pain
   initialTemperature: 1
-  temperatureDecay: 0.97
+  temperatureDecay: 0.98
   initialRootNoise: 0.25
   rootNoiseDecay: 0.98
-  initialDirichletAlpha: 0.3
-  dirichletAlphaDecay: 0.97
-  trainRatio: 0.5
-  initialLearningRate: 0.001
-  generationLearningRateDecay: 0.97
-  epochLearningRateDecay: 0.95
+  initialDirichletAlpha: 0.25
+  dirichletAlphaDecay: 0.98
+  trainRatio: 0.8
+  initialLearningRate: 0.005
+  generationLearningRateDecay: 0.98
+  epochLearningRateDecay: 0.9
   minTemperature: 0.2
   gamesDisplay: {fileID: 687380570}
   secondaryDisplay: {fileID: 893634495}
@@ -1332,10 +1331,10 @@ MonoBehaviour:
   tokenPrefab: {fileID: 4829274275781154994, guid: f6a1910f35f3849e6b241abfa776f85c, type: 3}
   boardPrefab: {fileID: 8300344835910928282, guid: 406ece8d1c41244a18df53a679e4330e, type: 3}
   pointerPrefab: {fileID: 3805199350634122791, guid: a0a2ca382c16d464295032e4feba995e, type: 3}
-  redColor: {r: 0.8980392, g: 0.32156864, b: 0.32156864, a: 1}
-  yellowColor: {r: 0.8980392, g: 0.81960785, b: 0.32156864, a: 1}
-  redPointerColor: {r: 0.99215686, g: 0.34117648, b: 0.34117648, a: 0.8}
-  yellowPointerColor: {r: 0.99215686, g: 0.85490197, b: 0.34117648, a: 0.8}
+  redColor: {r: 0.83137256, g: 0.36078432, b: 0.34117648, a: 1}
+  yellowColor: {r: 0.88235295, g: 0.81960785, b: 0.40392157, a: 1}
+  redPointerColor: {r: 0.9137255, g: 0.3882353, b: 0.3647059, a: 1}
+  yellowPointerColor: {r: 0.88, g: 0.8077295, b: 0.34859905, a: 1}
 --- !u!1 &1176777808
 GameObject:
   m_ObjectHideFlags: 0

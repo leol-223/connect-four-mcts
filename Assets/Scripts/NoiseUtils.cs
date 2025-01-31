@@ -1,16 +1,17 @@
 using System;
 using System.Threading;
+using UnityEngine;
 
 public static class NoiseUtils
 {
-    private static readonly ThreadLocal<Random> random = 
-        new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref randomSeed)));
+    private static readonly ThreadLocal<System.Random> random = 
+        new ThreadLocal<System.Random>(() => new System.Random(Interlocked.Increment(ref randomSeed)));
     private static int randomSeed = Environment.TickCount ^ Guid.NewGuid().GetHashCode();
 
     public static float[] SampleDirichlet(int dim, float alpha)
     {
         float[] gammas = new float[dim];
-        float sum = 0f;
+        float sum = 0.0f;
         for (int i = 0; i < dim; i++)
         {
             gammas[i] = SampleGamma(alpha, 1.0f);
@@ -48,34 +49,34 @@ public static class NoiseUtils
         if (alpha < 1)
         {
             float u = (float)random.Value.NextDouble();
-            return SampleGamma(alpha + 1f, 1f) * (float)Math.Pow(u, 1f / alpha);
+            return SampleGamma(alpha + 1.0f, 1.0f) * Mathf.Pow(u, 1.0f / alpha);
         }
 
-        float d = alpha - 1f / 3f;
-        float c = 1f / (float)Math.Sqrt(9f * d);
+        float d = alpha - 1.0f / 3.0f;
+        float c = 1.0f / Mathf.Sqrt(9.0f * d);
 
         while (true)
         {
-            float x = RandomNormal(0f, 1f);
-            float v = 1f + c * x;
+            float x = RandomNormal(0.0f, 1.0f);
+            float v = 1.0f + c * x;
             if (v <= 0) continue;
 
             v = v * v * v;
             float u = (float)random.Value.NextDouble();
             
-            if (u < 1f - 0.0331f * x * x * x * x)
+            if (u < 1.0f - 0.0331f * x * x * x * x)
                 return scale * d * v;
-            if (Math.Log(u) < 0.5f * x * x + d * (1f - v + Math.Log(v)))
+            if (Mathf.Log(u) < 0.5f * x * x + d * (1.0f - v + Mathf.Log(v)))
                 return scale * d * v;
         }
     }
 
     public static float RandomNormal(float mean, float std)
     {
-        float u1 = 1f - (float)random.Value.NextDouble();
-        float u2 = 1f - (float)random.Value.NextDouble();
-        float randStdNormal = (float)(Math.Sqrt(-2.0 * Math.Log(u1)) *
-                              Math.Sin(2.0 * Math.PI * u2));
+        float u1 = 1.0f - (float)random.Value.NextDouble();
+        float u2 = 1.0f - (float)random.Value.NextDouble();
+        float randStdNormal = Mathf.Sqrt(-2.0f * Mathf.Log(u1)) *
+                              Mathf.Sin(2.0f * Mathf.PI * u2);
         return mean + std * randStdNormal;
     }
 }

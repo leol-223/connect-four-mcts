@@ -45,7 +45,7 @@ public class GameManager : MonoBehaviour
     private TreeNode rootNode;
     private Board.Player currentPlayer = Board.Player.Red;
 
-
+    
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
@@ -62,77 +62,8 @@ public class GameManager : MonoBehaviour
         board = new BoardNN();
         rootNode = null;
 
-        valueNetwork = new NeuralNetwork(NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
-
-        // Value Network
-        valueNetwork.AddConvolutionalLayer(
-            inputDepth: 2,
-            inputHeight: 6,
-            inputWidth: 7,
-            numFilters: 32,     // Increased from 16 to 32 filters
-            filterSize: 3,
-            stride: 1,
-            usePadding: true,
-            activation: Activation.LeakyReLU
-        );
-        
-        valueNetwork.AddPoolingLayer(
-            inputDepth: 32,
-            inputHeight: 6,
-            inputWidth: 7,
-            poolSize: 2,
-            stride: 2
-        );
-
-        valueNetwork.AddDenseLayer(
-            inputSize: 32 * 3 * 3,
-            outputSize: 64,     // Increased from 32 to 64
-            activation: Activation.LeakyReLU
-        );
-
-        valueNetwork.AddDenseLayer(
-            inputSize: 64,
-            outputSize: 1,
-            activation: Activation.Tanh
-        );
-
-        // Mirror for policy network
-        policyNetwork = new NeuralNetwork(NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
-
-        // Policy Network
-        policyNetwork.AddConvolutionalLayer(
-            inputDepth: 2,
-            inputHeight: 6,
-            inputWidth: 7,
-            numFilters: 32,     // Increased to match value network
-            filterSize: 3,
-            stride: 1,
-            usePadding: true,
-            activation: Activation.LeakyReLU
-        );
-        
-        policyNetwork.AddPoolingLayer(
-            inputDepth: 32,
-            inputHeight: 6,
-            inputWidth: 7,
-            poolSize: 2,
-            stride: 2
-        );
-
-        policyNetwork.AddDenseLayer(
-            inputSize: 32 * 3 * 3,
-            outputSize: 64,     // Increased to match value network
-            activation: Activation.LeakyReLU
-        );
-
-        policyNetwork.AddDenseLayer(
-            inputSize: 64,
-            outputSize: 7,
-            activation: Activation.Softmax
-        );
-
-        valueNetwork.LoadNetwork(valuePath);
-        policyNetwork.LoadNetwork(policyPath);
+        valueNetwork = NeuralNetwork.Load(valuePath);
+        policyNetwork = NeuralNetwork.Load(policyPath);
 
         board.valueNetwork = valueNetwork;
         board.policyNetwork = policyNetwork;
@@ -265,15 +196,6 @@ public class GameManager : MonoBehaviour
             tokenObjects[position * 6 + (board.heights[position] - 1)] = slidingToken;
             SwitchPlayer();
         }
-        /*
-        int[] drawIndexes = new int[] {0, 7, 14, 21};
-        for (int i = 0; i < drawIndexes.Length; i++)
-        {
-            if (tokenObjects[drawIndexes[i]] != null) {
-                tokenObjects[drawIndexes[i]].GetComponent<SpriteRenderer>().color = new Color(0, 0, 0);
-            };
-        }
-        */
     }
 
     public void CreateToken() {
@@ -459,50 +381,16 @@ public class GameManager : MonoBehaviour
         return Mathf.Abs(((x + (7 * boardScale) / 2) / boardScale) % 1 - 0.5f);
     }
 
-    public float[] GetNeuralInput(ulong redBitboard, ulong yellowBitboard)
-    {
-        float[] result = new float[84];
-
-        // Match the exact same position calculation as ShowBoard
-        for (int col = 0; col < 7; col++)
-        {
-            for (int row = 0; row < 6; row++)
-            {
-                int bitPosition = 8 * col + row;
-                int nnPosition = col * 6 + row;
-                
-                bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
-                bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
-                
-                result[nnPosition] = isRed ? 1.0f : 0.0f;
-                result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
-            }
-        }
-
-        return result;
-    }
-
-    public void DebugPolicyOutputs(ulong redBitboard, ulong yellowBitboard)
-    {
-        float[] result = GetNeuralInput(redBitboard, yellowBitboard);
-
-        float[] evaluation = policyNetwork.Evaluate(result);
-        for (int i = 0; i < 7; i++)
-        {
-            Debug.Log("Column " + i + ": " + evaluation[i]);
-        }
-    }
-
     public void DebugSearchStatistics(TreeNode rootNode) {
-        float totalVisits = rootNode.children.Sum(c => c.N);
+        double totalVisits = rootNode.children.Sum(c => c.N);
         
         var stats = new List<string>();
         foreach (var child in rootNode.children) {
             int col = child.priorMove;
-            float visits = child.N;
-            float value = child.Q;
-            float prior = child.prior;
-            float visitPercentage = visits / totalVisits * 100;
+            double visits = child.N;
+            double value = child.Q;
+            double prior = child.prior;
+            double visitPercentage = visits / totalVisits * 100;
             
             stats.Add($"Column {col + 1}: " +
                      $"Visits={visits} ({visitPercentage:F1}%), " +

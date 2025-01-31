@@ -7,6 +7,7 @@ using System.Linq;
 
 public class BoardNN
 {
+    
     public enum Player { None, Red, Yellow };
     public enum NodeType
     {
@@ -25,9 +26,6 @@ public class BoardNN
     public NeuralNetwork policyNetwork;
     public float rootNoise;
     public float dirichletAlpha;
-
-    public float[] redPositionalVals = new float[7] { 0, 1, 2, 3, 2, 1, 0 };
-    public float[] yellowPositionVals = new float[7] { 1, 0, 1.5f, 3.5f, 1.5f, 0, 1 };
 
     public float maxDepth;
     public float[] promise;
@@ -97,7 +95,7 @@ public class BoardNN
 
         // Default to deterministic selection (temperature = 0)
         TreeNode bestChild = null;
-        float bestVisits = -1f;
+        float bestVisits = -1.0f;
         float totalVisits = 0;
 
         for (int i = 0; i < 7; i++) {

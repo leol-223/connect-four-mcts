@@ -78,7 +78,7 @@ public class TrainBoard : MonoBehaviour
     private int numRedWins;
     private int numYellowWins;
     private int numDraws;
-
+    
     // Add this struct at the class level
     private struct BoardState : IEquatable<BoardState>
     {
@@ -108,7 +108,7 @@ public class TrainBoard : MonoBehaviour
             return redBoard.GetHashCode() ^ yellowBoard.GetHashCode();
         }
     }
-
+    
     void Start()
     {
         TreeNode.SetExplorationConstraints(false);
@@ -118,80 +118,26 @@ public class TrainBoard : MonoBehaviour
             numPositions[i] = 0;
         }
 
-        valueNetwork = new NeuralNetwork(NeuralNetwork.MSE, NeuralNetwork.MSEDerivative);
-
-        // Value Network
-        valueNetwork.AddConvolutionalLayer(
-            inputDepth: 2,    // One channel each for red and yellow pieces
-            inputHeight: 6,   // 6 rows
-            inputWidth: 7,    // 7 columns
-            numFilters: 16,
-            filterSize: 3,
-            stride: 1,
-            usePadding: true,
-            activation: Activation.LeakyReLU
-        );
-        
-        valueNetwork.AddPoolingLayer(
-            inputDepth: 16,
-            inputHeight: 6,
-            inputWidth: 7,
-            poolSize: 2,
-            stride: 2
+        int[] valueLayers = new int[] { 84, 16, 16, 1};
+        valueNetwork = new NeuralNetwork(
+            valueLayers,
+            ActivationType.ReLU,
+            ActivationType.Tanh,
+            ErrorType.MeanSquaredError
         );
 
-        // Add an intermediate dense layer
-        valueNetwork.AddDenseLayer(
-            inputSize: 16 * 3 * 3,
-            outputSize: 64,     // Wider first dense layer
-            activation: Activation.LeakyReLU
-        );
 
-        // Add residual connection by concatenating with previous layer output
-        valueNetwork.AddDenseLayer(
-            inputSize: 64,
-            outputSize: 1,
-            activation: Activation.Tanh
-        );
-
-        // Mirror for policy network
-        policyNetwork = new NeuralNetwork(NeuralNetwork.CategoricalCrossEntropy, NeuralNetwork.CategoricalCrossEntropyDerivative);
-
-        // Policy Network
-        policyNetwork.AddConvolutionalLayer(
-            inputDepth: 2,
-            inputHeight: 6,
-            inputWidth: 7,
-            numFilters: 16,
-            filterSize: 3,
-            stride: 1,
-            usePadding: true,
-            activation: Activation.LeakyReLU
-        );
-        
-        policyNetwork.AddPoolingLayer(
-            inputDepth: 16,
-            inputHeight: 6,
-            inputWidth: 7,
-            poolSize: 2,
-            stride: 2
-        );
-
-        policyNetwork.AddDenseLayer(
-            inputSize: 16 * 3 * 3,
-            outputSize: 64,
-            activation: Activation.LeakyReLU
-        );
-
-        policyNetwork.AddDenseLayer(
-            inputSize: 64,
-            outputSize: 7,
-            activation: Activation.Softmax
+        int[] policyLayers = new int[] { 84, 16, 16, 7};
+        policyNetwork = new NeuralNetwork(
+            policyLayers,
+            ActivationType.ReLU,
+            ActivationType.Softmax,
+            ErrorType.CategoricalCrossEntropy
         );
 
         if (startGeneration+generationIncrement > 0) {
-            valueNetwork.LoadNetwork(modelName+"-V" + (startGeneration+generationIncrement).ToString());
-            policyNetwork.LoadNetwork(modelName+"-P" + (startGeneration+generationIncrement).ToString());
+            valueNetwork = NeuralNetwork.Load(modelName+"-V" + (startGeneration+generationIncrement).ToString());
+            policyNetwork = NeuralNetwork.Load(modelName+"-P" + (startGeneration+generationIncrement).ToString());
             generationCounter = startGeneration;
         }
 
@@ -256,7 +202,7 @@ public class TrainBoard : MonoBehaviour
             {
                 int currentIterations = Mathf.Min(
                     maxIterations,
-                    Mathf.RoundToInt(initialIterations * Mathf.Pow(iterationsGrowthRate, generationCounter))
+                    Mathf.RoundToInt((float)(initialIterations * Mathf.Pow(iterationsGrowthRate, generationCounter)))
                 );
 
                 float temperature = Mathf.Max(
@@ -324,10 +270,6 @@ public class TrainBoard : MonoBehaviour
                     float[] promise = new float[7];
                     for (int i = 0; i < 7; i++) {
                         promise[i] = board.promise[i];
-                        if (fullChildren.Contains(i) && promise[i] > 0) {
-                            Debug.Log($"Error encountered at child {i}, value {promise[i]}");
-                            ShowBoardFromNNInput(position);
-                        }
                     }
                     
                     positions.Add(position);
@@ -354,17 +296,17 @@ public class TrainBoard : MonoBehaviour
                 
                 if (winningPlayer == BoardNN.Player.Red)
                 {
-                    output = new float[1] { 1f * discount };
+                    output = new float[1] { 1.0f * discount };
                     numRedWins += 1;
                 }
                 else if (winningPlayer == BoardNN.Player.Yellow)
                 {
-                    output = new float[1] { -1f * discount };
+                    output = new float[1] { -1.0f * discount };
                     numYellowWins += 1;
                 }
                 else
                 {
-                    output = new float[1] {0f};
+                    output = new float[1] {0.0f};
                     numDraws += 1;
                 }
 
@@ -382,7 +324,7 @@ public class TrainBoard : MonoBehaviour
                     if (randomPosition[i] > 0.5f) totalPieces++;
                 }
                 
-                float[] policy = policyNetwork.Evaluate(randomPosition);
+                float[] policy = (float[])policyNetwork.Forward(randomPosition);
                 float[] truePolicy = promises[randomPositionIndex];
 
                 int maxIndex2 = 0;
@@ -411,7 +353,7 @@ public class TrainBoard : MonoBehaviour
                     DisplayPointer(BoardNN.Player.Yellow, maxIndex2, 0.8f);
                     DisplayPointer2(BoardNN.Player.Yellow, maxIndex3, 0.5f);
                 }
-                float evaluation = valueNetwork.Evaluate(randomPosition)[0];
+                float evaluation = ((float[])valueNetwork.Forward(randomPosition))[0];
                 
                 string evalSign = evaluation > 0 ? "+" : "";
                 string outSign = output[0] > 0 ? "+" : "";
@@ -464,31 +406,50 @@ public class TrainBoard : MonoBehaviour
             {
                 int trainTestSplit = (int)(trainRatio * valueInputs.Count);
 
-                // Using GetRange for Lists
+                // First split into train/test lists
                 valueTrainInputs = valueInputs.GetRange(0, trainTestSplit);
                 valueTestInputs = valueInputs.GetRange(trainTestSplit, valueInputs.Count - trainTestSplit);
-
                 valueTrainOutputs = valueOutputs.GetRange(0, trainTestSplit);
                 valueTestOutputs = valueOutputs.GetRange(trainTestSplit, valueOutputs.Count - trainTestSplit);
-
                 policyTrainInputs = policyInputs.GetRange(0, trainTestSplit);
                 policyTestInputs = policyInputs.GetRange(trainTestSplit, policyInputs.Count - trainTestSplit);
-
                 policyTrainOutputs = policyOutputs.GetRange(0, trainTestSplit);
                 policyTestOutputs = policyOutputs.GetRange(trainTestSplit, policyOutputs.Count - trainTestSplit);
 
-                Debug.Log($"Training data length: {valueTrainInputs.Count}, Testing data length: {valueTestInputs.Count}");
+                // Convert Lists to arrays
+                float[][] valueTrainInputsArray = valueTrainInputs.ToArray();
+                float[][] valueTestInputsArray = valueTestInputs.ToArray();
+                float[][] valueTrainOutputsArray = valueTrainOutputs.ToArray();
+                float[][] valueTestOutputsArray = valueTestOutputs.ToArray();
+                float[][] policyTrainInputsArray = policyTrainInputs.ToArray();
+                float[][] policyTestInputsArray = policyTestInputs.ToArray();
+                float[][] policyTrainOutputsArray = policyTrainOutputs.ToArray();
+                float[][] policyTestOutputsArray = policyTestOutputs.ToArray();
+
+                Debug.Log($"Training data length: {valueTrainInputsArray.Length}, Testing data length: {valueTestInputsArray.Length}");
                 
                 // Base learning rate decays with generations
                 float generationAdjustedLR = initialLearningRate * Mathf.Pow(generationLearningRateDecay, generationCounter);
                 // Further decay within epochs
-                float currentLearningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
+                float learningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
 
-                valueNetwork.TrainOneEpoch(valueTrainInputs, valueTrainOutputs, currentLearningRate, 64);
-                policyNetwork.TrainOneEpoch(policyTrainInputs, policyTrainOutputs, currentLearningRate, 64);
+                valueNetwork.Train(valueTrainInputsArray, valueTrainOutputsArray, batchSize: 16, learningRate: learningRate);
+                policyNetwork.Train(policyTrainInputsArray, policyTrainOutputsArray, batchSize: 16, learningRate: learningRate);
 
-                float cost1 = valueNetwork.CalculateCost(valueTestInputs, valueTestOutputs);
-                float cost2 = policyNetwork.CalculateCost(policyTestInputs, policyTestOutputs);
+                // Calculate validation loss
+                float cost1 = 0;
+                float cost2 = 0;
+
+                for (int j = 0; j < valueTestInputs.Count; j++) {
+                    float[] valueOutput = (float[])valueNetwork.Forward(valueTestInputs[0]);
+                    cost1 += CalculateLoss(valueOutput, valueTestOutputs[0]);
+
+                    float[] policyOutput = (float[])policyNetwork.Forward(policyTestInputs[0]);
+                    cost2 += CalculateLoss(policyOutput, policyTestOutputs[0]);
+                }
+
+                cost1 /= valueTestInputs.Count;
+                cost2 /= valueTestInputs.Count;
                 
                 epochCounter += 1;
                 Debug.Log("Value cost: " + cost1.ToString());
@@ -498,8 +459,8 @@ public class TrainBoard : MonoBehaviour
             else
             {
                 generationCounter += 1;
-                valueNetwork.SaveNetwork(modelName+"-V" + (generationCounter+generationIncrement).ToString());
-                policyNetwork.SaveNetwork(modelName+"-P" + (generationCounter+generationIncrement).ToString());
+                valueNetwork.Save(modelName+"-V" + (generationCounter+generationIncrement).ToString());
+                policyNetwork.Save(modelName+"-P" + (generationCounter+generationIncrement).ToString());
 
                 valueInputs.Clear();
                 valueOutputs.Clear();
@@ -524,51 +485,59 @@ public class TrainBoard : MonoBehaviour
 
     public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        float[] result = new float[84];
+        float[] result = new float[2 * 6 * 7 + 1];  // 85 elements total (84 board state + 1 parity)
 
+        int totalPieces = 0;
         for (int row = 0; row < 6; row++)
         {
             for (int col = 0; col < 7; col++)
             {
                 int bitPosition = 8 * col + row;
-                int nnPosition = row * 7 + col;  // Row-major ordering
                 
                 bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
                 bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
                 
-                result[nnPosition] = isRed ? 1.0f : 0.0f;
-                result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
+                // First 42 elements (0-41) represent red pieces
+                // Last 42 elements (42-83) represent yellow pieces
+                result[row * 7 + col] = isRed ? 1.0f : 0.0f;                  // Red channel
+                result[42 + row * 7 + col] = isYellow ? 1.0f : 0.0f;         // Yellow channel
+                
+                if (isRed || isYellow) totalPieces++;
             }
         }
+        
+        // Add parity bit as 85th element (1.0 for red's turn, 0.0 for yellow's turn)
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }
 
-    public float[] GetSymmetricalPosition(ulong redBitboard, ulong yellowBitboard)
+    public static float[] GetSymmetricalPosition(ulong redBitboard, ulong yellowBitboard)
     {
-        // First get the neural network input representation
-        float[] nnInput = GetPosition(redBitboard, yellowBitboard);
-        float[] symmetricInput = new float[84];
+        float[] result = new float[2 * 6 * 7 + 1];  // 85 elements total (84 board state + 1 parity)
 
-        // For each row
+        int totalPieces = 0;
         for (int row = 0; row < 6; row++)
         {
-            // For each column
             for (int col = 0; col < 7; col++)
             {
-                // Calculate source and target indices using row-major ordering
-                int sourceIndex = row * 7 + col;
-                int targetIndex = row * 7 + (6 - col);  // Flip column horizontally
-
-                // Copy red pieces (first 42 values)
-                symmetricInput[targetIndex] = nnInput[sourceIndex];
+                int bitPosition = 8 * col + row;
                 
-                // Copy yellow pieces (last 42 values)
-                symmetricInput[targetIndex + 42] = nnInput[sourceIndex + 42];
+                bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
+                bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
+                
+                // Mirror horizontally by using (6 - col) instead of col
+                result[row * 7 + (6 - col)] = isRed ? 1.0f : 0.0f;                  // Red channel
+                result[42 + row * 7 + (6 - col)] = isYellow ? 1.0f : 0.0f;         // Yellow channel
+                
+                if (isRed || isYellow) totalPieces++;
             }
         }
+        
+        // Add parity bit as 85th element (1.0 for red's turn, 0.0 for yellow's turn)
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
-        return symmetricInput;
+        return result;
     }
 
     public static void ShowBoardFromNNInput(float[] nnInput)
@@ -665,16 +634,15 @@ public class TrainBoard : MonoBehaviour
     void DisplayPosition(float[] nnInput) {
         ClearBoard();  // Clear existing tokens first
         
-        // For each row
+        // For each column and row
         for (int row = 0; row < 6; row++) {
-            // For each column
             for (int col = 0; col < 7; col++) {
-                // Calculate position in the NN input array using row-major ordering
-                int index = (row * 7) + col;
+                // Calculate indices in the flattened array
+                int redIndex = row * 7 + col;        // First 42 values are red
+                int yellowIndex = 42 + row * 7 + col;  // Next 42 values are yellow
                 
-                // Check both red and yellow arrays
-                bool isRed = nnInput[index] > 0.5f;
-                bool isYellow = nnInput[index + 42] > 0.5f;
+                bool isRed = nnInput[redIndex] > 0.5;
+                bool isYellow = nnInput[yellowIndex] > 0.5;
                 
                 if (isRed) {
                     DrawToken(col, row, true);
@@ -719,5 +687,25 @@ public class TrainBoard : MonoBehaviour
 
     float ColumnToX(int column) {
         return (column - 3f) * 0.75f - 3.3f;
+    }
+
+    // Helper method
+    private string GetNonZeroPositions(float[,,] input)
+    {
+        var positions = new List<string>();
+        for (int c = 0; c < input.GetLength(0); c++)
+            for (int i = 0; i < input.GetLength(1); i++)
+                for (int j = 0; j < input.GetLength(2); j++)
+                    if (Mathf.Abs(input[c,i,j]) > 1e-6)
+                        positions.Add($"({c},{i},{j})={input[c,i,j]:F2}");
+        return string.Join("; ", positions);
+    }
+
+    public float CalculateLoss(float[] arr1, float[] arr2) {
+        float tot = 0;
+        for (int i = 0; i < arr1.Length; i++) {
+            tot += (arr1[i] - arr2[i]) * (arr1[i] - arr2[i]);
+        }
+        return tot;
     }
 }

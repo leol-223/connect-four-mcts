@@ -19,6 +19,7 @@ public struct State
     }
 }
 
+
 public class TreeNode {
     public List<TreeNode> children;
     public int priorMove;
@@ -90,12 +91,12 @@ public class TreeNode {
             if (HasConnectFour(childState.redBitboard))
             {
                 child.isTerminal = true;
-                child.eval = 1f * Mathf.Pow(0.99f, childState.heights.Sum());
+                child.eval = 1.0f * Mathf.Pow(0.99f, child.state.heights.Sum());
             }
             else if (HasConnectFour(childState.yellowBitboard))
             {
                 child.isTerminal = true;
-                child.eval = -1f * Mathf.Pow(0.99f, childState.heights.Sum());
+                child.eval = -1.0f * Mathf.Pow(0.99f, child.state.heights.Sum());
             }
             else if (IsFull(childState))
             {
@@ -151,22 +152,29 @@ public class TreeNode {
     }
 
     public float[] StateToInput(State state) {
-        float[] result = new float[84];
+        float[] result = new float[2 * 6 * 7 + 1];  // 85 elements total (84 board state + 1 parity)
 
+        int totalPieces = 0;
         for (int row = 0; row < 6; row++)
         {
             for (int col = 0; col < 7; col++)
             {
                 int bitPosition = 8 * col + row;
-                int nnPosition = row * 7 + col;  // Row-major ordering
                 
                 bool isRed = (state.redBitboard & ((ulong)1 << bitPosition)) != 0;
                 bool isYellow = (state.yellowBitboard & ((ulong)1 << bitPosition)) != 0;
                 
-                result[nnPosition] = isRed ? 1.0f : 0.0f;
-                result[nnPosition + 42] = isYellow ? 1.0f : 0.0f;
+                // First 42 elements (0-41) represent red pieces
+                // Last 42 elements (42-83) represent yellow pieces
+                result[row * 7 + col] = isRed ? 1.0f : 0.0f;                  // Red channel
+                result[42 + row * 7 + col] = isYellow ? 1.0f : 0.0f;         // Yellow channel
+                
+                if (isRed || isYellow) totalPieces++;
             }
         }
+        
+        // Add parity bit as 85th element (1.0 for red's turn, 0.0 for yellow's turn)
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
 
         return result;
     }
@@ -355,13 +363,13 @@ public class TreeNode {
 
     private float[] EvaluatePolicy(float[] input) {
         lock(_networkLock) {
-            return policyNetwork.Evaluate(input);
+            return policyNetwork.Forward(input);
         }
     }
     
     private float EvaluateValue(float[] input) {
         lock(_networkLock) {
-            return valueNetwork.Evaluate(input)[0];
+            return valueNetwork.Forward(input)[0];
         }
     }
 
