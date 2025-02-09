@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
 using UnityEngine.Profiling;
+using System.Collections;
 
 public class TrainBoard : MonoBehaviour
 {
@@ -15,7 +16,7 @@ public class TrainBoard : MonoBehaviour
     public int startGeneration;
     public int generationIncrement;
     public int numGames;
-    public int numEpochs;
+    public int maxEpochs;
     public int initialIterations;
     public float iterationsGrowthRate;
     public int maxIterations;
@@ -69,6 +70,11 @@ public class TrainBoard : MonoBehaviour
     private List<float[]> policyTestOutputs;
     private HashSet<BoardState> uniquePositions;
     private int[] numPositions;
+    private GameObject valueGraph;
+    private GameObject policyGraph;
+    private List<float> valueCosts;
+    private List<float> policyCosts;
+    private BoardNN board;
 
     private int epochCounter = 0;
     private int counter = 0;
@@ -78,6 +84,9 @@ public class TrainBoard : MonoBehaviour
     private int numRedWins;
     private int numYellowWins;
     private int numDraws;
+
+    private float[] lastRandomPosition;
+    private float lastOutcome;
     
     // Add this struct at the class level
     private struct BoardState : IEquatable<BoardState>
@@ -109,8 +118,13 @@ public class TrainBoard : MonoBehaviour
         }
     }
     
+    // Add this field at the class level
+    private bool isCleaningGeneration = false;
+
     void Start()
     {
+        lastOutcome = 0f;
+        lastRandomPosition = new float[85];
         TreeNode.SetExplorationConstraints(false);
 
         numPositions = new int[42];
@@ -118,27 +132,30 @@ public class TrainBoard : MonoBehaviour
             numPositions[i] = 0;
         }
 
-        int[] valueLayers = new int[] { 84, 16, 16, 1};
+        int[] valueLayers = new int[] { 85, 64, 32, 16, 1};
         valueNetwork = new NeuralNetwork(
             valueLayers,
-            ActivationType.ReLU,
-            ActivationType.Tanh,
-            ErrorType.MeanSquaredError
+            NeuralNetwork.ActivationType.ReLU,
+            NeuralNetwork.ActivationType.Tanh,
+            NeuralNetwork.LossType.MSE
         );
 
 
-        int[] policyLayers = new int[] { 84, 16, 16, 7};
+        int[] policyLayers = new int[] { 85, 64, 32, 16, 7};
         policyNetwork = new NeuralNetwork(
             policyLayers,
-            ActivationType.ReLU,
-            ActivationType.Softmax,
-            ErrorType.CategoricalCrossEntropy
+            NeuralNetwork.ActivationType.ReLU,
+            NeuralNetwork.ActivationType.Softmax,
+            NeuralNetwork.LossType.MSE
         );
 
         if (startGeneration+generationIncrement > 0) {
             valueNetwork = NeuralNetwork.Load(modelName+"-V" + (startGeneration+generationIncrement).ToString());
             policyNetwork = NeuralNetwork.Load(modelName+"-P" + (startGeneration+generationIncrement).ToString());
             generationCounter = startGeneration;
+            TreeNode.SetUniformEvaluation(false);
+        } else {
+            TreeNode.SetUniformEvaluation(true);
         }
 
         valueInputs = new List<float[]>();
@@ -146,6 +163,8 @@ public class TrainBoard : MonoBehaviour
 
         policyInputs = new List<float[]>();
         policyOutputs = new List<float[]>();
+
+        board = new BoardNN();
 
         startTime = Time.realtimeSinceStartup;
         uniquePositions = new HashSet<BoardState>();
@@ -190,6 +209,10 @@ public class TrainBoard : MonoBehaviour
 
         tokens = new List<GameObject>();
         CreateEmptyBoard();
+
+        TreeNode.ClearTranspositionTable();
+        valueCosts = new List<float>();
+        policyCosts = new List<float>();
     }
 
     // Update is called once per frame
@@ -197,6 +220,11 @@ public class TrainBoard : MonoBehaviour
     {
         if (generationCounter < numGenerations)
         {
+            if (isCleaningGeneration)
+            {
+                return; // Skip update while cleaning
+            }
+
             generationText.text = "Generation " + (generationCounter + generationIncrement + 1).ToString();
             if (counter < numGames)
             {
@@ -216,7 +244,7 @@ public class TrainBoard : MonoBehaviour
                 float currentNoise = initialRootNoise * Mathf.Pow(rootNoiseDecay, generationCounter);
                 float currentAlpha = initialDirichletAlpha * Mathf.Pow(dirichletAlphaDecay, generationCounter);
                 
-                BoardNN board = new BoardNN();
+                board.ResetBoard();
                 board.valueNetwork = valueNetwork;
                 board.policyNetwork = policyNetwork;
                 board.rootNoise = currentNoise;
@@ -271,7 +299,6 @@ public class TrainBoard : MonoBehaviour
                     for (int i = 0; i < 7; i++) {
                         promise[i] = board.promise[i];
                     }
-                    
                     positions.Add(position);
 
                     promises.Add(promise);
@@ -309,15 +336,15 @@ public class TrainBoard : MonoBehaviour
                     output = new float[1] {0.0f};
                     numDraws += 1;
                 }
-
-                if (debuggedOutput) {
-                    Debug.Log(output[0]);
-                }
+                lastOutcome = output[0]+0f;
 
                 int randomPositionIndex;
                 randomPositionIndex = UnityEngine.Random.Range(0, positions.Count-1);
                 float[] randomPosition = positions[randomPositionIndex];
+
+                lastRandomPosition = (float[])randomPosition.Clone();
                 DisplayPosition(randomPosition);
+                
                 // Count total pieces to determine whose turn it is
                 int totalPieces = 0;
                 for (int i = 0; i < 84; i++) {
@@ -344,14 +371,18 @@ public class TrainBoard : MonoBehaviour
                 if (totalPieces % 2 == 0) {
                     sideDisplayMainText.color = redColor;
                     sideDisplayMainText.text = "Red to play";
+                    
                     DisplayPointer(BoardNN.Player.Red, maxIndex2, 0.8f);
                     DisplayPointer2(BoardNN.Player.Red, maxIndex3, 0.5f);
+                    
                 } else {
                     // other yellow is too bright against white
                     sideDisplayMainText.color = new Color(182f/255f, 161f/255f, 27f/255f);
                     sideDisplayMainText.text = "Yellow to play";
+                    
                     DisplayPointer(BoardNN.Player.Yellow, maxIndex2, 0.8f);
                     DisplayPointer2(BoardNN.Player.Yellow, maxIndex3, 0.5f);
+                    
                 }
                 float evaluation = ((float[])valueNetwork.Forward(randomPosition))[0];
                 
@@ -401,86 +432,272 @@ public class TrainBoard : MonoBehaviour
 
                 thirdText.text = $"{uniquePositions.Count} Unique Positions | Med: {medianIndex+1} | Range: {minIndex+1} - {maxIndex+1}";
                 statsText.text = $"<color=#b31414>{numRedWins} red</color> | <color=#636262>{numDraws} draw</color> | <color=#959711>{numYellowWins} yellow</color>";
+
+                // Clear temporary game state lists
+                positions.Clear();
+                promises.Clear();
+                
+                // Force garbage collection periodically
+                if (counter % 100 == 0)
+                {
+                    positions.Clear();
+                    promises.Clear();
+                    System.GC.Collect();
+                    System.GC.WaitForPendingFinalizers();
+                    Resources.UnloadUnusedAssets();
+
+                    // LogMemorySnapshot($"{counter}");
+                }
             }
-            else if (epochCounter < numEpochs)
+            else if (epochCounter < maxEpochs)
             {
+                thirdText.text = "";
+
                 int trainTestSplit = (int)(trainRatio * valueInputs.Count);
 
-                // First split into train/test lists
+                // Base learning rate decays with generations
+                float generationAdjustedLR = initialLearningRate * Mathf.Pow(generationLearningRateDecay, generationCounter);
+                // Further decay within epochs
+                float learningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
+
                 valueTrainInputs = valueInputs.GetRange(0, trainTestSplit);
                 valueTestInputs = valueInputs.GetRange(trainTestSplit, valueInputs.Count - trainTestSplit);
                 valueTrainOutputs = valueOutputs.GetRange(0, trainTestSplit);
                 valueTestOutputs = valueOutputs.GetRange(trainTestSplit, valueOutputs.Count - trainTestSplit);
+
+                float[][] valueTrainInputsArray = valueTrainInputs.ToArray();
+                float[][] valueTestInputsArray = valueTestInputs.ToArray();
+                float[][] valueTrainOutputsArray = valueTrainOutputs.ToArray();
+                float[][] valueTestOutputsArray = valueTestOutputs.ToArray();
+                // Debug.Log($"Value - Training data length: {valueTrainInputsArray.Length}, Testing data length: {valueTestInputsArray.Length}");
+
+                valueNetwork.TrainEpoch(valueTrainInputsArray, valueTrainOutputsArray, batchSize: 64, learningRate: learningRate);
+
+                float evaluation = ((float[])valueNetwork.Forward(lastRandomPosition))[0];
+
+                string evalSign = evaluation > 0 ? "+" : "";
+                string outSign = lastOutcome > 0 ? "+" : "";
+                sideDisplaySecondaryText.text = $"Eval: {evalSign}{evaluation:F4}\nOutcome: {outSign}{lastOutcome:F4}";
+
+                // Calculate validation loss
+                float cost = 0;
+
+                for (int j = 0; j < valueTestInputs.Count; j++) {
+                    float[] valueOutput = (float[])valueNetwork.Forward(valueTestInputs[j]);
+                    cost += CalculateLoss(valueOutput, valueTestOutputs[j]);
+                }
+                cost /= valueTestInputs.Count;
+
+                valueCosts.Add(cost);
+
+                int minCostIndex = 0;
+                float minCost = Mathf.Infinity;
+                for (int i = 0; i < valueCosts.Count; i++) {
+                    if (valueCosts[i] < minCost) {
+                        minCost = valueCosts[i];
+                        minCostIndex = i;
+                    }
+                }
+                
+                Debug.Log("Value cost: " + cost.ToString());
+
+                if (minCostIndex == valueCosts.Count - 1) {
+                    valueNetwork.Save(modelName+"-V" + (generationCounter+generationIncrement+1).ToString());
+                    Debug.Log($"Saving value network at epoch {epochCounter+1}");
+                }
+
+                if (valueCosts.Count > 1) {
+                    if (valueGraph != null) {
+                        Destroy(valueGraph);
+                    }
+                    valueGraph = CreateGraph(new Vector3(3.65f, -2.1f, 0), new Vector3(5.65f, -1.5f, 0), valueCosts, new Color(3f/255f, 102f/255f, 252f/255f), 0.08f);
+                }
+
                 policyTrainInputs = policyInputs.GetRange(0, trainTestSplit);
                 policyTestInputs = policyInputs.GetRange(trainTestSplit, policyInputs.Count - trainTestSplit);
                 policyTrainOutputs = policyOutputs.GetRange(0, trainTestSplit);
                 policyTestOutputs = policyOutputs.GetRange(trainTestSplit, policyOutputs.Count - trainTestSplit);
 
                 // Convert Lists to arrays
-                float[][] valueTrainInputsArray = valueTrainInputs.ToArray();
-                float[][] valueTestInputsArray = valueTestInputs.ToArray();
-                float[][] valueTrainOutputsArray = valueTrainOutputs.ToArray();
-                float[][] valueTestOutputsArray = valueTestOutputs.ToArray();
                 float[][] policyTrainInputsArray = policyTrainInputs.ToArray();
                 float[][] policyTestInputsArray = policyTestInputs.ToArray();
                 float[][] policyTrainOutputsArray = policyTrainOutputs.ToArray();
                 float[][] policyTestOutputsArray = policyTestOutputs.ToArray();
 
-                Debug.Log($"Training data length: {valueTrainInputsArray.Length}, Testing data length: {valueTestInputsArray.Length}");
+                // Debug.Log($"Policy - Training data length: {policyTrainInputsArray.Length}, Testing data length: {policyTrainOutputsArray.Length}");
                 
-                // Base learning rate decays with generations
-                float generationAdjustedLR = initialLearningRate * Mathf.Pow(generationLearningRateDecay, generationCounter);
-                // Further decay within epochs
-                float learningRate = generationAdjustedLR * Mathf.Pow(epochLearningRateDecay, epochCounter);
 
-                valueNetwork.Train(valueTrainInputsArray, valueTrainOutputsArray, batchSize: 16, learningRate: learningRate);
-                policyNetwork.Train(policyTrainInputsArray, policyTrainOutputsArray, batchSize: 16, learningRate: learningRate);
+                policyNetwork.TrainEpoch(policyTrainInputsArray, policyTrainOutputsArray, batchSize: 32, learningRate: learningRate);
 
                 // Calculate validation loss
-                float cost1 = 0;
-                float cost2 = 0;
+                cost = 0;
 
-                for (int j = 0; j < valueTestInputs.Count; j++) {
-                    float[] valueOutput = (float[])valueNetwork.Forward(valueTestInputs[0]);
-                    cost1 += CalculateLoss(valueOutput, valueTestOutputs[0]);
-
-                    float[] policyOutput = (float[])policyNetwork.Forward(policyTestInputs[0]);
-                    cost2 += CalculateLoss(policyOutput, policyTestOutputs[0]);
+                for (int j = 0; j < policyTestInputs.Count; j++) {
+                    float[] policyOutput = (float[])policyNetwork.Forward(policyTestInputs[j]);
+                    cost += CalculateCrossEntropyLoss(policyOutput, policyTestOutputs[j]);
                 }
 
-                cost1 /= valueTestInputs.Count;
-                cost2 /= valueTestInputs.Count;
-                
+                cost /= policyTestInputs.Count;
+
+                policyCosts.Add(cost);
+
+                minCostIndex = 0;
+                minCost = Mathf.Infinity;
+                for (int i = 0; i < policyCosts.Count; i++) {
+                    if (policyCosts[i] < minCost) {
+                        minCost = policyCosts[i];
+                        minCostIndex = i;
+                    }
+                }
+
+                Debug.Log("Policy cost: " + cost.ToString());
+                if (minCostIndex == policyCosts.Count - 1) {
+                    policyNetwork.Save(modelName+"-P" + (generationCounter+generationIncrement+1).ToString());
+                    Debug.Log($"Saving policy network at epoch {epochCounter+1}");
+                }
+
+                if (policyCosts.Count > 1) {
+                    if (policyGraph != null) {
+                        Destroy(policyGraph);
+                    }
+                    policyGraph = CreateGraph(new Vector3(5.85f, -2.1f, 0), new Vector3(7.85f, -1.5f, 0), policyCosts, new Color(256f/255f, 61f/255f, 61f/255f), 0.08f);
+                }
+
                 epochCounter += 1;
-                Debug.Log("Value cost: " + cost1.ToString());
-                Debug.Log("Policy cost: " + cost2.ToString());
-                secondaryDisplay.text = "Epoch " + epochCounter.ToString() + " | V: " + cost1.ToString("F4") + " | P: " + cost2.ToString("F4");
+
+                secondaryDisplay.text = "Epoch " + epochCounter.ToString() + " | V: " + valueCosts[valueCosts.Count-1].ToString("F4") + " | P: " + policyCosts[policyCosts.Count-1].ToString("F4");
             }
             else
             {
-                generationCounter += 1;
-                valueNetwork.Save(modelName+"-V" + (generationCounter+generationIncrement).ToString());
-                policyNetwork.Save(modelName+"-P" + (generationCounter+generationIncrement).ToString());
-
-                valueInputs.Clear();
-                valueOutputs.Clear();
-                policyInputs.Clear();
-                policyOutputs.Clear();
-                uniquePositions.Clear();
-
-                numRedWins = 0;
-                numDraws = 0;
-                numYellowWins = 0;
-                
-                epochCounter = 0;
-                counter = 0;
-                startTime = Time.realtimeSinceStartup;
-
-                for (int i = 0; i < 42; i++) {
-                    numPositions[i] = 0;
-                }
+                StartCoroutine(CleanupGeneration());
             }
         }
+    }
+
+    private IEnumerator CleanupGeneration()
+    {
+        isCleaningGeneration = true;
+        
+        generationCounter += 1;
+
+        // First, clear all current game objects and references
+        if (board != null)
+        {
+            board.Dispose();
+            board = null;
+        }
+
+        // Clear all collections explicitly
+        valueInputs?.Clear();
+        valueOutputs?.Clear();
+        policyInputs?.Clear();
+        policyOutputs?.Clear();
+        valueTrainInputs?.Clear();
+        valueTrainOutputs?.Clear();
+        valueTestInputs?.Clear();
+        valueTestOutputs?.Clear();
+        policyTrainInputs?.Clear();
+        policyTrainOutputs?.Clear();
+        policyTestInputs?.Clear();
+        policyTestOutputs?.Clear();
+
+        // Null out all collections after clearing
+        valueInputs = null;
+        valueOutputs = null;
+        policyInputs = null;
+        policyOutputs = null;
+        valueTrainInputs = null;
+        valueTrainOutputs = null;
+        valueTestInputs = null;
+        valueTestOutputs = null;
+        policyTrainInputs = null;
+        policyTrainOutputs = null;
+        policyTestInputs = null;
+        policyTestOutputs = null;
+
+        // Clear and null Unity objects
+        if (valueGraph != null) {
+            Destroy(valueGraph);
+            valueGraph = null;
+        }
+        if (policyGraph != null) {
+            Destroy(policyGraph);
+            policyGraph = null;
+        }
+        
+        // Clear all tokens
+        foreach (var token in tokens) {
+            if (token != null) {
+                Destroy(token);
+            }
+        }
+        tokens.Clear();
+        tokens = null;
+
+        // Clear neural networks
+        valueNetwork = null;
+        policyNetwork = null;
+
+        // Clear static caches
+        TreeNode.ClearTranspositionTable();
+        TreeNode.SetUniformEvaluation(false);
+
+        // First pass GC
+        GC.Collect(2, GCCollectionMode.Forced, true);
+        GC.WaitForPendingFinalizers();
+        yield return Resources.UnloadUnusedAssets();
+        
+        yield return new WaitForSeconds(0.1f); // Give Unity time to process
+        
+        // Second pass GC
+        GC.Collect(2, GCCollectionMode.Forced, true);
+        GC.WaitForPendingFinalizers();
+        yield return Resources.UnloadUnusedAssets();
+
+        yield return new WaitForSeconds(0.1f); // Give Unity more time
+
+        // Recreate all collections
+        valueInputs = new List<float[]>();
+        valueOutputs = new List<float[]>();
+        policyInputs = new List<float[]>();
+        policyOutputs = new List<float[]>();
+        valueTrainInputs = new List<float[]>();
+        valueTrainOutputs = new List<float[]>();
+        valueTestInputs = new List<float[]>();
+        valueTestOutputs = new List<float[]>();
+        policyTrainInputs = new List<float[]>();
+        policyTrainOutputs = new List<float[]>();
+        policyTestInputs = new List<float[]>();
+        policyTestOutputs = new List<float[]>();
+        uniquePositions = new HashSet<BoardState>();
+        tokens = new List<GameObject>();
+        valueCosts = new List<float>();
+        policyCosts = new List<float>();
+
+        // Reset counters
+        numRedWins = 0;
+        numDraws = 0;
+        numYellowWins = 0;
+        epochCounter = 0;
+        counter = 0;
+        startTime = Time.realtimeSinceStartup;
+
+        // Reset arrays
+        numPositions = new int[42];
+        lastRandomPosition = new float[85];
+
+        // Third pass GC after recreation
+        GC.Collect(2, GCCollectionMode.Forced, true);
+        GC.WaitForPendingFinalizers();
+        yield return Resources.UnloadUnusedAssets();
+
+        // Load fresh networks
+        valueNetwork = NeuralNetwork.Load(modelName+"-V" + (generationCounter+generationIncrement).ToString());
+        policyNetwork = NeuralNetwork.Load(modelName+"-P" + (generationCounter+generationIncrement).ToString());
+
+        isCleaningGeneration = false;
+
+        board = new BoardNN();
     }
 
     public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
@@ -707,5 +924,94 @@ public class TrainBoard : MonoBehaviour
             tot += (arr1[i] - arr2[i]) * (arr1[i] - arr2[i]);
         }
         return tot;
+    }
+
+    public float CalculateCrossEntropyLoss(float[] predicted, float[] actual) {
+        float loss = 0;
+        for (int i = 0; i < predicted.Length; i++) {
+            // Add small epsilon to prevent log(0)
+            float clippedPred = Mathf.Clamp(predicted[i], 1e-7f, 1 - 1e-7f);
+            loss += -actual[i] * Mathf.Log(clippedPred);
+        }
+        return loss;
+    }
+
+    void ClearAllCaches() {
+        // Clear static caches
+        TreeNode.ClearTranspositionTable();
+        
+        // Clear other collections
+        valueInputs.Clear();
+        valueOutputs.Clear();
+        policyInputs.Clear();
+        policyOutputs.Clear();
+        
+        // Force cleanup
+        System.GC.Collect(2, GCCollectionMode.Forced, true);
+        System.GC.WaitForPendingFinalizers();
+        Resources.UnloadUnusedAssets();
+    }
+
+    void OnDestroy() {
+        ClearAllCaches();
+    }
+
+    public GameObject CreateGraph(Vector3 bottomLeft, Vector3 topRight, List<float> heights, Color color, float width = 0.1f) {
+        float minHeight = Mathf.Infinity;
+        float maxHeight = Mathf.NegativeInfinity;
+        for (int i = 0; i < heights.Count; i++) {
+            float height = heights[i];
+            minHeight = Mathf.Min(height, minHeight);
+            maxHeight = Mathf.Max(height, maxHeight);
+        }
+        Vector3[] points = new Vector3[heights.Count];
+        for (int i = 0; i < heights.Count; i++) {
+            float x = Mathf.Lerp(bottomLeft.x, topRight.x, i /(float)(heights.Count));
+            float yRelative = (heights[i] - minHeight) / (maxHeight - minHeight);
+            float y = Mathf.Lerp(bottomLeft.y, topRight.y, yRelative);
+            points[i] = new Vector3(x, y, 0);
+        }
+        return CreatePath(points, color, width);
+    }
+
+    public GameObject CreatePath(Vector3[] points, Color color, float width = 0.1f)
+    {
+        GameObject lineObj = new GameObject("Path");
+        LineRenderer line = lineObj.AddComponent<LineRenderer>();
+        
+        // Set material
+        line.material = new Material(Shader.Find("Unlit/Color"));
+        line.material.color = color;
+        
+        // Set width
+        line.startWidth = width;
+        line.endWidth = width;
+        
+        // Set positions
+        line.positionCount = points.Length;
+        line.SetPositions(points);
+        
+        return lineObj;
+    }
+
+    void LogMemoryUsage(string point) {
+        float totalMemory = (float)System.GC.GetTotalMemory(false) / (1024 * 1024); // MB
+        Debug.Log($"Memory at {point}: {totalMemory:F2}MB");
+    }
+
+    private void LogMemorySnapshot(string point)
+    {
+        float totalMemoryMB = (float)GC.GetTotalMemory(false) / (1024 * 1024);
+        float monoMemoryMB = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong() / (1024 * 1024);
+        float totalAllocatedMB = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / (1024 * 1024);
+        
+        Debug.Log($"Memory at {point}:");
+        Debug.Log($"Total GC Memory: {totalMemoryMB:F2}MB");
+        Debug.Log($"Mono Memory: {monoMemoryMB:F2}MB");
+        Debug.Log($"Total Allocated: {totalAllocatedMB:F2}MB");
+        
+        // Log cache sizes
+        Debug.Log($"Policy Cache Size: {TreeNode.policyCache?.Count ?? 0}");
+        Debug.Log($"Value Cache Size: {TreeNode.valueCache?.Count ?? 0}");
     }
 }

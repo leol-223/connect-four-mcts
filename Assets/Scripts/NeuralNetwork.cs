@@ -1,186 +1,311 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Runtime.Serialization.Formatters.Binary;  // For BinaryFormatter
-using System.Linq;  // For Max(), Min() in forward pass, if needed
-using System.Threading;  // For ThreadLocal
-
-// Enums for activation and error types
-public enum ActivationType
-{
-    ReLU,
-    Softmax,
-    Tanh
-}
-
-public enum ErrorType
-{
-    MeanSquaredError,
-    CategoricalCrossEntropy
-}
+using System.Runtime.Serialization.Formatters.Binary;
+using UnityEngine; // optional if using in Unity
 
 [Serializable]
 public class NeuralNetwork
 {
-    private readonly int[] layers;        // Made readonly as it never changes after construction
-    private readonly object lockObject = new object();  // Add lock object for thread safety
-    
-    private float[][] biases;    // biases[layer][neuron]
-    private float[][][] weights; // weights[layer][neuron][previousLayerNeuron]
+    public enum ActivationType
+    {
+        Sigmoid,
+        ReLU,
+        Tanh,
+        Softmax // Typically used for output layer in classification
+    }
 
-    private ActivationType hiddenActivation;
-    private ActivationType outputActivation;
-    private ErrorType errorType;
+    public enum LossType
+    {
+        MSE,
+        CrossEntropy
+    }
+
+    [Serializable]
+    private class Layer
+    {
+        public float[,] Weights;  // [outputSize, inputSize]
+        public float[] Biases;    // [outputSize]
+
+        [NonSerialized] public float[] Inputs;   // Used in backprop
+        [NonSerialized] public float[] Outputs;  // Used in backprop
+    }
+
+    private List<Layer> _layers;
+
+    // Activation for hidden layers
+    private ActivationType _hiddenActivation;
+    // Activation for output layer
+    private ActivationType _outputActivation;
+    private LossType _loss;
+
+    private System.Random _random;
+
+    // --- Hyperparameters to mitigate numeric issues ---
+    // Epsilon used in softmax to avoid 0 or 1
+    public float SoftmaxEpsilon { get; set; } = 1e-7f;
+    // Max norm for gradients in a batch
+    public float GradientClipNorm { get; set; } = 5.0f;
 
     [NonSerialized]
-    private ThreadLocal<Random> rnd;  // Make Random thread-local
+    private object _lockObject = new object();
 
-    public NeuralNetwork(int[] layers,
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="layerSizes">Network layer sizes, e.g. [input, hidden1, hidden2, output]</param>
+    /// <param name="hiddenActivation">Activation for hidden layers (Sigmoid/ReLU/Tanh/etc.)</param>
+    /// <param name="outputActivation">Activation for final (output) layer</param>
+    /// <param name="loss">Loss function</param>
+    public NeuralNetwork(int[] layerSizes,
                          ActivationType hiddenActivation,
                          ActivationType outputActivation,
-                         ErrorType errorType)
+                         LossType loss)
     {
-        this.layers = layers;
-        this.hiddenActivation = hiddenActivation;
-        this.outputActivation = outputActivation;
-        this.errorType = errorType;
+        if (layerSizes.Length < 2)
+            throw new ArgumentException("Must have at least input and output layers.");
 
-        // Initialize thread-local random
-        rnd = new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
+        _hiddenActivation = hiddenActivation;
+        _outputActivation = outputActivation;
+        _loss = loss;
+        _random = new System.Random();
 
-        // Initialize weights and biases
-        biases = new float[layers.Length][];
-        weights = new float[layers.Length][][];
-
-        // We don't use index 0 for biases & weights because input layer has no incoming weights
-        for (int i = 1; i < layers.Length; i++)
+        _layers = new List<Layer>();
+        for (int i = 1; i < layerSizes.Length; i++)
         {
-            biases[i] = new float[layers[i]];
-            weights[i] = new float[layers[i]][];
+            int inputSize = layerSizes[i - 1];
+            int outputSize = layerSizes[i];
 
-            // Initialize biases randomly
-            for (int neuron = 0; neuron < layers[i]; neuron++)
+            var layer = new Layer
             {
-                biases[i][neuron] = GetRandomValue();
-            }
+                Weights = new float[outputSize, inputSize],
+                Biases = new float[outputSize],
+                Inputs = new float[inputSize],
+                Outputs = new float[outputSize]
+            };
 
-            // Initialize weights randomly
-            for (int neuron = 0; neuron < layers[i]; neuron++)
+            // Xavier/Glorot initialization
+            float limit = (float)Math.Sqrt(6f / (inputSize + outputSize));
+            for (int o = 0; o < outputSize; o++)
             {
-                weights[i][neuron] = new float[layers[i - 1]];
-                for (int prevNeuron = 0; prevNeuron < layers[i - 1]; prevNeuron++)
+                for (int x = 0; x < inputSize; x++)
                 {
-                    weights[i][neuron][prevNeuron] = GetRandomValue();
+                    layer.Weights[o, x] = (float)(_random.NextDouble() * 2.0 - 1.0) * limit;
                 }
+                layer.Biases[o] = 0f;
             }
+
+            _layers.Add(layer);
         }
     }
 
-    /// <summary>
-    /// Forward pass through the network - Thread-safe version
-    /// </summary>
+    #region Forward
+
     public float[] Forward(float[] input)
     {
-        // Take a snapshot of weights and biases to ensure consistency during the forward pass
-        float[][] biasesSnapshot;
-        float[][][] weightsSnapshot;
-        
-        lock (lockObject)
+        lock (_lockObject)
         {
-            biasesSnapshot = biases.Select(layer => layer?.ToArray()).ToArray();
-            weightsSnapshot = weights.Select(layer => 
-                layer?.Select(neuron => neuron?.ToArray()).ToArray()
-            ).ToArray();
-        }
-
-        float[] activations = (float[])input.Clone();
-
-        // Use snapshots instead of direct field access
-        for (int layer = 1; layer < layers.Length; layer++)
-        {
-            float[] newActivations = new float[layers[layer]];
-            ActivationType actType = (layer < layers.Length - 1)
-                ? hiddenActivation
-                : outputActivation;
-
-            for (int neuron = 0; neuron < layers[layer]; neuron++)
+            float[] current = input;
+            for (int l = 0; l < _layers.Count; l++)
             {
-                float sum = biasesSnapshot[layer][neuron];
-                for (int prevNeuron = 0; prevNeuron < layers[layer - 1]; prevNeuron++)
+                Layer layer = _layers[l];
+                layer.Inputs = current;
+                float[] rawOutput = new float[layer.Biases.Length];
+
+                // Compute logits
+                for (int o = 0; o < layer.Biases.Length; o++)
                 {
-                    sum += activations[prevNeuron] * weightsSnapshot[layer][neuron][prevNeuron];
+                    float sum = layer.Biases[o];
+                    for (int i = 0; i < current.Length; i++)
+                    {
+                        sum += layer.Weights[o, i] * current[i];
+                    }
+                    rawOutput[o] = sum;
                 }
-                newActivations[neuron] = ApplyActivation(sum, actType);
-            }
 
-            if (actType == ActivationType.Softmax)
-            {
-                newActivations = Softmax(newActivations);
-            }
+                // Decide which activation to use
+                ActivationType act = (l == _layers.Count - 1) ? _outputActivation : _hiddenActivation;
+                float[] activated = ApplyActivation(rawOutput, act);
 
-            activations = newActivations;
+                layer.Outputs = activated;
+                current = activated;
+            }
+            return current;
         }
-
-        return activations;
     }
 
-    /// <summary>
-    /// Train for a single epoch using batch-based updates
-    /// </summary>
-    /// <param name="inputs">Array of input vectors</param>
-    /// <param name="targets">Array of target vectors</param>
-    /// <param name="batchSize">Batch size</param>
-    /// <param name="learningRate">Learning rate</param>
-    public void Train(float[][] inputs, float[][] targets, int batchSize, float learningRate)
-    {
-        // Ensure thread-local random is initialized
-        if (rnd.Value == null)
-        {
-            rnd = new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
-        }
+    #endregion
 
-        lock (lockObject)  // Lock during training to prevent concurrent modifications
+    #region Train Single (Stochastic)
+
+    /// <summary>
+    /// Backprop for a single sample (immediate update).
+    /// </summary>
+    public void TrainSingleStochastic(float[] input, float[] target, float learningRate)
+    {
+        if (target.Length != _layers[_layers.Count - 1].Biases.Length)
+            throw new ArgumentException("Target size mismatch with output layer.");
+
+        lock (_lockObject)
         {
-            // Shuffle data
+            float[] output = Forward(input);
+
+            float[] outputError = ComputeOutputError(output, target, _loss, _outputActivation);
+
+            // Backprop layers
+            for (int l = _layers.Count - 1; l >= 0; l--)
+            {
+                Layer layer = _layers[l];
+                ActivationType act = (l == _layers.Count - 1) ? _outputActivation : _hiddenActivation;
+
+                float[] delta = new float[layer.Biases.Length];
+                for (int o = 0; o < delta.Length; o++)
+                {
+                    float dAct = DerivativeActivate(layer.Outputs[o], act);
+                    delta[o] = outputError[o] * dAct;
+                }
+
+                // Update weights & biases
+                for (int o = 0; o < delta.Length; o++)
+                {
+                    for (int i = 0; i < layer.Inputs.Length; i++)
+                    {
+                        float grad = delta[o] * layer.Inputs[i];
+                        layer.Weights[o, i] -= learningRate * grad;
+                    }
+                    layer.Biases[o] -= learningRate * delta[o];
+                }
+
+                // Propagate error backward
+                if (l > 0)
+                {
+                    float[] nextError = new float[_layers[l - 1].Biases.Length];
+                    for (int i = 0; i < nextError.Length; i++)
+                    {
+                        float sum = 0f;
+                        for (int o = 0; o < delta.Length; o++)
+                        {
+                            sum += layer.Weights[o, i] * delta[o];
+                        }
+                        nextError[i] = sum;
+                    }
+                    outputError = nextError;
+                }
+            }
+        }
+    }
+
+    #endregion
+
+    #region Mini-Batch / Epoch
+
+    /// <summary>
+    /// Train one epoch on the dataset, in mini-batches, with gradient clipping.
+    /// </summary>
+    public void TrainEpoch(float[][] inputs,
+                           float[][] targets,
+                           int batchSize,
+                           float learningRate,
+                           bool shuffle = true)
+    {
+        if (inputs.Length != targets.Length)
+            throw new ArgumentException("Inputs and targets must have same length.");
+
+        int numSamples = inputs.Length;
+        if (shuffle) 
             ShuffleData(inputs, targets);
 
-            // Process each batch
-            for (int batchStart = 0; batchStart < inputs.Length; batchStart += batchSize)
+        for (int start = 0; start < numSamples; start += batchSize)
+        {
+            int end = Math.Min(start + batchSize, numSamples);
+            int currentBatchSize = end - start;
+
+            // Allocate accumulators
+            var weightGrads = new float[_layers.Count][][];
+            var biasGrads   = new float[_layers.Count][];
+
+            for (int l = 0; l < _layers.Count; l++)
             {
-                int actualBatchSize = Math.Min(batchSize, inputs.Length - batchStart);
+                int outSize = _layers[l].Biases.Length;
+                int inSize  = _layers[l].Inputs.Length;
 
-                // Accumulate gradients
-                var nablaB = CreateBiasesStorage();
-                var nablaW = CreateWeightsStorage();
+                weightGrads[l] = new float[outSize][];
+                biasGrads[l]   = new float[outSize];
 
-                // Compute grad for each sample in batch
-                for (int i = 0; i < actualBatchSize; i++)
+                for (int o = 0; o < outSize; o++)
                 {
-                    int idx = batchStart + i;
-                    var (deltaNablaB, deltaNablaW) = Backprop(inputs[idx], targets[idx]);
+                    weightGrads[l][o] = new float[inSize];
+                }
+            }
 
-                    // Accumulate for the batch
-                    for (int l = 1; l < layers.Length; l++)
+            // Accumulate gradients for each sample in this batch
+            for (int idx = start; idx < end; idx++)
+            {
+                float[] output = Forward(inputs[idx]);
+                float[] outputError = ComputeOutputError(output, targets[idx], _loss, _outputActivation);
+
+                // Backprop to accumulate
+                for (int l = _layers.Count - 1; l >= 0; l--)
+                {
+                    Layer layer = _layers[l];
+                    ActivationType act = (l == _layers.Count - 1) ? _outputActivation : _hiddenActivation;
+
+                    float[] delta = new float[layer.Biases.Length];
+                    for (int o = 0; o < delta.Length; o++)
                     {
-                        for (int n = 0; n < layers[l]; n++)
+                        float dAct = DerivativeActivate(layer.Outputs[o], act);
+                        delta[o] = outputError[o] * dAct;
+                    }
+
+                    // accumulate grads
+                    for (int o = 0; o < delta.Length; o++)
+                    {
+                        biasGrads[l][o] += delta[o];
+                        for (int i = 0; i < layer.Inputs.Length; i++)
                         {
-                            nablaB[l][n] += deltaNablaB[l][n];
-                            for (int pn = 0; pn < layers[l - 1]; pn++)
+                            weightGrads[l][o][i] += delta[o] * layer.Inputs[i];
+                        }
+                    }
+
+                    // Next error
+                    if (l > 0)
+                    {
+                        float[] nextError = new float[_layers[l - 1].Biases.Length];
+                        for (int i = 0; i < nextError.Length; i++)
+                        {
+                            float sum = 0f;
+                            for (int o = 0; o < delta.Length; o++)
                             {
-                                nablaW[l][n][pn] += deltaNablaW[l][n][pn];
+                                sum += layer.Weights[o, i] * delta[o];
                             }
+                            nextError[i] = sum;
                         }
+                        outputError = nextError;
                     }
                 }
+            }
 
-                // Update weights and biases with average gradient for the batch
-                for (int l = 1; l < layers.Length; l++)
+            // --- GRADIENT CLIPPING ---
+            // If norms exceed GradientClipNorm, we scale them down.
+            ClipGradients(weightGrads, biasGrads, GradientClipNorm);
+
+            // --- APPLY UPDATES ---
+            lock (_lockObject)
+            {
+                for (int l = 0; l < _layers.Count; l++)
                 {
-                    for (int n = 0; n < layers[l]; n++)
+                    int outSize = _layers[l].Biases.Length;
+                    int inSize  = _layers[l].Inputs.Length;
+
+                    for (int o = 0; o < outSize; o++)
                     {
-                        biases[l][n] -= (learningRate / actualBatchSize) * nablaB[l][n];
-                        for (int pn = 0; pn < layers[l - 1]; pn++)
+                        float avgBiasGrad = biasGrads[l][o] / currentBatchSize;
+                        _layers[l].Biases[o] -= learningRate * avgBiasGrad;
+
+                        for (int i = 0; i < inSize; i++)
                         {
-                            weights[l][n][pn] -= (learningRate / actualBatchSize) * nablaW[l][n][pn];
+                            float avgWeightGrad = weightGrads[l][o][i] / currentBatchSize;
+                            _layers[l].Weights[o, i] -= learningRate * avgWeightGrad;
                         }
                     }
                 }
@@ -189,257 +314,313 @@ public class NeuralNetwork
     }
 
     /// <summary>
-    /// Backpropagation for one sample
+    /// Clips gradients by global L2 norm if it exceeds maxNorm.
     /// </summary>
-    private (float[][], float[][][]) Backprop(float[] input, float[] target)
+    private void ClipGradients(float[][][] weightGrads, float[][] biasGrads, float maxNorm)
     {
-        // Step 1: Forward pass (store activations & z-values for each layer)
-        float[][] activations = new float[layers.Length][];
-        float[][] zValues = new float[layers.Length][];
-
-        activations[0] = (float[])input.Clone();
-
-        for (int l = 1; l < layers.Length; l++)
+        // 1. Compute total L2 norm across all layers
+        double totalSq = 0.0;
+        for (int l = 0; l < _layers.Count; l++)
         {
-            activations[l] = new float[layers[l]];
-            zValues[l] = new float[layers[l]];
-
-            ActivationType actType = (l < layers.Length - 1) ? hiddenActivation : outputActivation;
-
-            for (int n = 0; n < layers[l]; n++)
+            int outSize = weightGrads[l].Length;
+            for (int o = 0; o < outSize; o++)
             {
-                float sum = biases[l][n];
-                for (int pn = 0; pn < layers[l - 1]; pn++)
+                // biases
+                double b = biasGrads[l][o];
+                totalSq += b * b;
+
+                // weights
+                for (int i = 0; i < weightGrads[l][o].Length; i++)
                 {
-                    sum += activations[l - 1][pn] * weights[l][n][pn];
-                }
-                zValues[l][n] = sum; // Weighted sum before activation
-            }
-
-            // Softmax for last layer
-            if (actType == ActivationType.Softmax && l == layers.Length - 1)
-            {
-                activations[l] = Softmax(zValues[l]);
-            }
-            else
-            {
-                for (int n = 0; n < layers[l]; n++)
-                {
-                    activations[l][n] = ApplyActivation(zValues[l][n], actType);
+                    double w = weightGrads[l][o][i];
+                    totalSq += w * w;
                 }
             }
         }
 
-        // Step 2: Output error
-        float[] delta = new float[layers[layers.Length - 1]];
-        float[] output = activations[layers.Length - 1];
-
-        for (int n = 0; n < delta.Length; n++)
+        double norm = Math.Sqrt(totalSq);
+        if (norm > maxNorm)
         {
-            float errorDerivative = ErrorDerivative(output[n], target[n], errorType);
-            
-            float activationDerivative;
-            if (outputActivation == ActivationType.Softmax &&
-                errorType == ErrorType.CategoricalCrossEntropy)
+            // scale factor
+            float scale = (float)(maxNorm / norm);
+            for (int l = 0; l < _layers.Count; l++)
             {
-                // For Softmax + CrossEntropy, derivative simplifies to (output - target)
-                activationDerivative = 1.0f;
-            }
-            else
-            {
-                activationDerivative = ActivationDerivative(zValues[layers.Length - 1][n], outputActivation);
-            }
-            delta[n] = errorDerivative * activationDerivative;
-        }
-
-        // Grad storage
-        float[][] nablaB = CreateBiasesStorage();
-        float[][][] nablaW = CreateWeightsStorage();
-
-        // Step 2b: assign last-layer gradients
-        for (int n = 0; n < layers[layers.Length - 1]; n++)
-        {
-            nablaB[layers.Length - 1][n] = delta[n];
-            for (int pn = 0; pn < layers[layers.Length - 2]; pn++)
-            {
-                nablaW[layers.Length - 1][n][pn] = delta[n] * activations[layers.Length - 2][pn];
-            }
-        }
-
-        // Step 3: Propagate backward
-        for (int l = layers.Length - 2; l >= 1; l--)
-        {
-            float[] newDelta = new float[layers[l]];
-            for (int n = 0; n < layers[l]; n++)
-            {
-                float error = 0f;
-                for (int nn = 0; nn < layers[l + 1]; nn++)
+                int outSize = weightGrads[l].Length;
+                for (int o = 0; o < outSize; o++)
                 {
-                    error += weights[l + 1][nn][n] * delta[nn];
-                }
-                float derivative = ActivationDerivative(zValues[l][n], hiddenActivation);
-                newDelta[n] = error * derivative;
-            }
-            delta = newDelta;
-
-            for (int n = 0; n < layers[l]; n++)
-            {
-                nablaB[l][n] = delta[n];
-                for (int pn = 0; pn < layers[l - 1]; pn++)
-                {
-                    nablaW[l][n][pn] = delta[n] * activations[l - 1][pn];
+                    biasGrads[l][o] *= scale;
+                    for (int i = 0; i < weightGrads[l][o].Length; i++)
+                    {
+                        weightGrads[l][o][i] *= scale;
+                    }
                 }
             }
         }
-
-        return (nablaB, nablaW);
     }
 
-    /// <summary>
-    /// Save the entire network object to file using BinaryFormatter.
-    /// </summary>
-    public void Save(string filePath)
+    #endregion
+
+    #region Activations
+
+    private float[] ApplyActivation(float[] values, ActivationType act)
     {
-        // Because of potential security vulnerabilities in BinaryFormatter,
-        // do not use in untrusted scenarios. This is for demonstration only.
-        BinaryFormatter bf = new BinaryFormatter();
-        using (FileStream fs = new FileStream(filePath, FileMode.Create))
+        switch (act)
         {
-            bf.Serialize(fs, this);
-        }
-    }
+            case ActivationType.Sigmoid:
+                for (int i = 0; i < values.Length; i++)
+                {
+                    values[i] = 1f / (1f + (float)Math.Exp(-values[i]));
+                    if (float.IsNaN(values[i]) || float.IsInfinity(values[i])) 
+                        values[i] = 0f; // fallback
+                }
+                return values;
 
-    /// <summary>
-    /// Load the entire network object from file using BinaryFormatter.
-    /// </summary>
-    public static NeuralNetwork Load(string filePath)
-    {
-        BinaryFormatter bf = new BinaryFormatter();
-        using (FileStream fs = new FileStream(filePath, FileMode.Open))
-        {
-            NeuralNetwork nn = (NeuralNetwork)bf.Deserialize(fs);
-            nn.rnd = new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
-            return nn;
-        }
-    }
+            case ActivationType.ReLU:
+                for (int i = 0; i < values.Length; i++)
+                {
+                    values[i] = values[i] > 0 ? values[i] : 0f;
+                    if (float.IsNaN(values[i]) || float.IsInfinity(values[i])) 
+                        values[i] = 0f; 
+                }
+                return values;
 
-    // ----- Helper Methods -----
+            case ActivationType.Tanh:
+                for (int i = 0; i < values.Length; i++)
+                {
+                    values[i] = (float)Math.Tanh(values[i]);
+                    if (float.IsNaN(values[i]) || float.IsInfinity(values[i])) 
+                        values[i] = 0f;
+                }
+                return values;
 
-    private float GetRandomValue()
-    {
-        return (float)(rnd.Value.NextDouble() - 0.5);
-    }
-
-    private float[][] CreateBiasesStorage()
-    {
-        float[][] storage = new float[layers.Length][];
-        for (int i = 0; i < layers.Length; i++)
-        {
-            storage[i] = new float[layers[i]];
-        }
-        return storage;
-    }
-
-    private float[][][] CreateWeightsStorage()
-    {
-        float[][][] storage = new float[layers.Length][][];
-        for (int i = 0; i < layers.Length; i++)
-        {
-            storage[i] = new float[layers[i]][];
-            for (int j = 0; j < layers[i]; j++)
+            case ActivationType.Softmax:
             {
-                // The 0th layer has no previous
-                int prevCount = (i == 0) ? 0 : layers[i - 1];
-                storage[i][j] = new float[prevCount];
+                // 1) Find max for numerical stability
+                float maxVal = float.NegativeInfinity;
+                for (int i = 0; i < values.Length; i++)
+                    if (values[i] > maxVal) maxVal = values[i];
+
+                // 2) Exponentiate
+                double sumExp = 0.0;
+                for (int i = 0; i < values.Length; i++)
+                {
+                    double expVal = Math.Exp(values[i] - maxVal);
+                    values[i] = (float)expVal;
+                    sumExp += expVal;
+                }
+
+                // 3) Divide by sumExp
+                if (sumExp < 1e-15) sumExp = 1e-15; // safety check
+                for (int i = 0; i < values.Length; i++)
+                {
+                    values[i] /= (float)sumExp;
+                    // Clip to [SoftmaxEpsilon, 1 - SoftmaxEpsilon]
+                    values[i] = Mathf.Clamp(values[i], SoftmaxEpsilon, 1f - SoftmaxEpsilon);
+
+                    if (float.IsNaN(values[i]) || float.IsInfinity(values[i]))
+                    {
+                        values[i] = 1f / values.Length; // fallback (uniform)
+                    }
+                }
+                return values;
             }
+
+            default:
+                throw new NotImplementedException($"Activation {act} not implemented.");
         }
-        return storage;
     }
 
-    // Shuffle inputs and targets together using Fisher-Yates
+    private float DerivativeActivate(float activatedValue, ActivationType act)
+    {
+        switch (act)
+        {
+            case ActivationType.Sigmoid:
+                // derivative is y*(1-y)
+                return activatedValue * (1f - activatedValue);
+
+            case ActivationType.ReLU:
+                // derivative is 1 if y>0 else 0
+                return (activatedValue > 0f) ? 1f : 0f;
+
+            case ActivationType.Tanh:
+                // derivative is 1 - y^2
+                return 1f - activatedValue * activatedValue;
+
+            case ActivationType.Softmax:
+                // For cross-entropy + softmax, derivative wrt logits is (output[i] - target[i]).
+                // We do a fallback derivative for MSE, etc.: y*(1-y).
+                // However, in practice, with Softmax + CrossEntropy we rarely need this derivative in the same manner.
+                return activatedValue * (1f - activatedValue);
+
+            default:
+                throw new NotImplementedException($"Derivative for {act} not implemented.");
+        }
+    }
+
+    #endregion
+
+    #region Loss
+
+    private float[] ComputeOutputError(float[] output, float[] target, LossType loss, ActivationType outputAct)
+    {
+        // We typically do (output - target) for both MSE or CrossEntropy
+        float[] error = new float[output.Length];
+        switch (loss)
+        {
+            case LossType.MSE:
+                for (int i = 0; i < output.Length; i++)
+                {
+                    error[i] = output[i] - target[i];
+                    if (float.IsNaN(error[i]) || float.IsInfinity(error[i]))
+                        error[i] = 0f;
+                }
+                break;
+
+            case LossType.CrossEntropy:
+                // Standard simplified approach: (output[i] - target[i]).
+                // If using Softmax output, this aligns with the derivative wrt. logits.
+                for (int i = 0; i < output.Length; i++)
+                {
+                    error[i] = output[i] - target[i];
+                    if (float.IsNaN(error[i]) || float.IsInfinity(error[i]))
+                        error[i] = 0f;
+                }
+                break;
+
+            default:
+                throw new NotImplementedException($"Loss {loss} not implemented.");
+        }
+        return error;
+    }
+
+    #endregion
+
+    #region Data Shuffling
+
     private void ShuffleData(float[][] inputs, float[][] targets)
     {
-        for (int i = inputs.Length - 1; i > 0; i--)
+        for (int i = 0; i < inputs.Length - 1; i++)
         {
-            int swapIndex = rnd.Value.Next(i + 1);
+            int j = _random.Next(i, inputs.Length);
+
             var tempIn = inputs[i];
-            var tempOut = targets[i];
-            inputs[i] = inputs[swapIndex];
-            targets[i] = targets[swapIndex];
-            inputs[swapIndex] = tempIn;
-            targets[swapIndex] = tempOut;
+            inputs[i] = inputs[j];
+            inputs[j] = tempIn;
+
+            var tempTg = targets[i];
+            targets[i] = targets[j];
+            targets[j] = tempTg;
         }
     }
 
-    // Apply activation
-    private float ApplyActivation(float x, ActivationType actType)
+    #endregion
+
+    #region Save / Load
+
+    [Serializable]
+    private class SerializableNetwork
     {
-        switch (actType)
+        public SerializableLayer[] Layers;
+        public ActivationType HiddenActivation;
+        public ActivationType OutputActivation;
+        public LossType Loss;
+    }
+
+    [Serializable]
+    private class SerializableLayer
+    {
+        public float[] FlattenedWeights;  // Flattened 2D array
+        public int WeightRows;            // Original dimensions
+        public int WeightCols;
+        public float[] Biases;
+    }
+
+    public void Save(string path)
+    {
+        lock (_lockObject)
         {
-            case ActivationType.ReLU:
-                return x > 0f ? x : 0f;
-            case ActivationType.Softmax:
-                // Typically handled as a vector, but fallback is exp(x)
-                return (float)Math.Exp(x);
-            case ActivationType.Tanh:
-                return (float)Math.Tanh(x);
-            default:
-                return x;
+            var data = new SerializableNetwork
+            {
+                Layers = new SerializableLayer[_layers.Count],
+                HiddenActivation = _hiddenActivation,
+                OutputActivation = _outputActivation,
+                Loss = _loss
+            };
+
+            // Copy weights and biases
+            for (int i = 0; i < _layers.Count; i++)
+            {
+                var layer = _layers[i];
+                int rows = layer.Weights.GetLength(0);
+                int cols = layer.Weights.GetLength(1);
+                
+                // Flatten the 2D weights array
+                float[] flatWeights = new float[rows * cols];
+                for (int r = 0; r < rows; r++)
+                {
+                    for (int c = 0; c < cols; c++)
+                    {
+                        flatWeights[r * cols + c] = layer.Weights[r, c];
+                    }
+                }
+
+                data.Layers[i] = new SerializableLayer
+                {
+                    FlattenedWeights = flatWeights,
+                    WeightRows = rows,
+                    WeightCols = cols,
+                    Biases = layer.Biases
+                };
+            }
+
+            string json = JsonUtility.ToJson(data);
+            File.WriteAllText(path, json);
         }
     }
 
-    // Activation Derivative
-    private float ActivationDerivative(float x, ActivationType actType)
+    public static NeuralNetwork Load(string path)
     {
-        switch (actType)
+        string json = File.ReadAllText(path);
+        var data = JsonUtility.FromJson<SerializableNetwork>(json);
+
+        // Calculate layer sizes
+        int[] layerSizes = new int[data.Layers.Length + 1];
+        layerSizes[0] = data.Layers[0].WeightCols;  // Input size
+        for (int i = 0; i < data.Layers.Length; i++)
         {
-            case ActivationType.ReLU:
-                return (x > 0f) ? 1f : 0f;
-            case ActivationType.Softmax:
-                // Typically used with cross-entropy; derivative is simplified
-                // We'll return 1.0f as a fallback
-                return 1f;
-            case ActivationType.Tanh:
-                // derivative of tanh(x) is 1 - tanh²(x)
-                float tanhX = (float)Math.Tanh(x);
-                return 1f - (tanhX * tanhX);
-            default:
-                return 1f;
+            layerSizes[i + 1] = data.Layers[i].WeightRows;
         }
+
+        // Create new network
+        var nn = new NeuralNetwork(
+            layerSizes,
+            data.HiddenActivation,
+            data.OutputActivation,
+            data.Loss
+        );
+
+        // Restore weights and biases
+        for (int i = 0; i < nn._layers.Count; i++)
+        {
+            var serializedLayer = data.Layers[i];
+            var layer = nn._layers[i];
+            
+            // Reconstruct 2D weights array
+            int rows = serializedLayer.WeightRows;
+            int cols = serializedLayer.WeightCols;
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    layer.Weights[r, c] = serializedLayer.FlattenedWeights[r * cols + c];
+                }
+            }
+
+            layer.Biases = serializedLayer.Biases;
+        }
+
+        return nn;
     }
 
-    // Softmax across a vector
-    private float[] Softmax(float[] z)
-    {
-        // for numerical stability, subtract max
-        float maxVal = z.Max();
-        float sumExp = 0f;
-        float[] exps = new float[z.Length];
-        for (int i = 0; i < z.Length; i++)
-        {
-            exps[i] = (float)Math.Exp(z[i] - maxVal);
-            sumExp += exps[i];
-        }
-        for (int i = 0; i < z.Length; i++)
-        {
-            exps[i] /= sumExp;
-        }
-        return exps;
-    }
-
-    // Error derivative wrt output
-    private float ErrorDerivative(float output, float target, ErrorType errorType)
-    {
-        switch (errorType)
-        {
-            case ErrorType.MeanSquaredError:
-                // d/dx (1/2 * (output - target)^2) => (output - target)
-                return (output - target);
-            case ErrorType.CategoricalCrossEntropy:
-                // Typically, derivative ~ (output - target) if output is from softmax
-                return (output - target);
-            default:
-                return (output - target);
-        }
-    }
+    #endregion
 }

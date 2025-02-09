@@ -7,7 +7,7 @@ using System.Linq;
 public class GameManager : MonoBehaviour
 {
     public List<Board.Player> aiPlayers;
-    public int searchIterations;
+    public int searchTimeMilliseconds;
     public Color redColor;
     public Color yellowColor;
     public Color redPointerColor;
@@ -22,10 +22,14 @@ public class GameManager : MonoBehaviour
     public float boardPadding;
     public float yLevel;
     public float dropHeight;
-    public string valuePath;
-    public string policyPath;
-    public NeuralNetwork valueNetwork;
-    public NeuralNetwork policyNetwork;
+    public string valuePath1;
+    public string policyPath1;
+    public string valuePath2;
+    public string policyPath2;
+    private NeuralNetwork valueNetwork1;
+    private NeuralNetwork policyNetwork1;
+    private NeuralNetwork valueNetwork2;
+    private NeuralNetwork policyNetwork2;
     public float temperature;
     public bool rootNoise;
 
@@ -41,7 +45,9 @@ public class GameManager : MonoBehaviour
     private bool isFirstPlayer = true;
     private bool isSlidingStage = true;
     private float timeSinceTokenDrop;
+    private float searchTimeAtStart;
     private bool searchStarted = false;
+    private float timeSinceLastSearchStart;
     private TreeNode rootNode;
     private Board.Player currentPlayer = Board.Player.Red;
 
@@ -49,6 +55,9 @@ public class GameManager : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
+        ClearAllResources();
+        
+        TreeNode.ClearTranspositionTable();
         TreeNode.SetExplorationConstraints(false);
 
         if (!aiPlayers.Contains(Board.Player.Red))
@@ -62,11 +71,15 @@ public class GameManager : MonoBehaviour
         board = new BoardNN();
         rootNode = null;
 
-        valueNetwork = NeuralNetwork.Load(valuePath);
-        policyNetwork = NeuralNetwork.Load(policyPath);
+        valueNetwork1 = NeuralNetwork.Load(valuePath1);
+        policyNetwork1 = NeuralNetwork.Load(policyPath1);
+        valueNetwork2 = NeuralNetwork.Load(valuePath2);
+        policyNetwork2 = NeuralNetwork.Load(policyPath2);
 
-        board.valueNetwork = valueNetwork;
-        board.policyNetwork = policyNetwork;
+        board.valueNetwork = valueNetwork1;
+        board.policyNetwork = policyNetwork1;
+
+        searchTimeAtStart = 0;
     }
 
     // Update is called once per frame
@@ -94,31 +107,44 @@ public class GameManager : MonoBehaviour
                 {
                     if (aiPlayers.Contains(currentPlayer))
                     {
-                        if (currentIter < searchIterations)
-                        {
-                            if (!searchStarted) {
-                                rootNode = board.GetRootNode(currentPlayer == Board.Player.Red);
-                                searchStarted = true;
+                        if (!searchStarted) {
+                            if (aiPlayers.IndexOf(currentPlayer) == 0) {
+                                board.valueNetwork = valueNetwork1;
+                                board.policyNetwork = policyNetwork1;
+                            } else {
+                                board.valueNetwork = valueNetwork2;
+                                board.policyNetwork = policyNetwork2;
                             }
+                            rootNode = board.GetRootNode(currentPlayer == Board.Player.Red);
+                            searchStarted = true;
+                            searchTimeAtStart = Time.realtimeSinceStartup;
+                            // only clear if there are two ai players
+                            if (aiPlayers[0] != Board.Player.None && aiPlayers[1] != Board.Player.None) {
+                                TreeNode.ClearTranspositionTable();
+                            }
+                        }
 
+                        if (searchStarted)
+                        {
+                            timeSinceLastSearchStart = Time.realtimeSinceStartup;
                             try {
                                 Parallel.For(0, 100, i => {
                                     rootNode.Search(0, 0);
                                 });
-                                currentIter += 100;
                             }
                             catch (AggregateException ae) {
                                 Debug.LogError($"Parallel search failed: {ae.Message}");
                             }
 
                             BoardNN.MoveEval move = board.BestMove(rootNode, temperature);
-                            Debug.Log(string.Join(",", board.promise));
+
+                            LogMemoryUsage();
 
                             DebugSearchStatistics(rootNode);
                             ShowPointer(currentPlayer, move.Move);
-                            if (currentIter >= searchIterations)
+                            if (Time.realtimeSinceStartup - searchTimeAtStart >= searchTimeMilliseconds * 0.001f)
                             {
-                                currentIter = 0;
+                                searchTimeAtStart = 0;
                                 CreateToken();
                                 MakeMove(move.Move);
                                 Destroy(pointer);
@@ -172,7 +198,7 @@ public class GameManager : MonoBehaviour
                 board.MakeMove(position, BoardNN.Player.Yellow);
             }
             BoardNN.Player winningPlayer = board.GetWinningPlayer();
-            if (winningPlayer != BoardNN.Player.None)
+            if (winningPlayer != BoardNN.Player.None || board.IsFull())
             {
                 isEnded = true;
                 timeSinceEnd = 0;
@@ -382,33 +408,109 @@ public class GameManager : MonoBehaviour
     }
 
     public void DebugSearchStatistics(TreeNode rootNode) {
-        double totalVisits = rootNode.children.Sum(c => c.N);
+        float totalVisits = rootNode.children.Sum(c => c.N);
         
-        var stats = new List<string>();
-        foreach (var child in rootNode.children) {
-            int col = child.priorMove;
-            double visits = child.N;
-            double value = child.Q;
-            double prior = child.prior;
-            double visitPercentage = visits / totalVisits * 100;
-            
-            stats.Add($"Column {col + 1}: " +
-                     $"Visits={visits} ({visitPercentage:F1}%), " +
-                     $"Value={value:F3}, " +
-                     $"Prior={prior:F3}");
-        }
-        
-        // Sort by visit count for easier comparison
-        stats.Sort((a, b) => {
-            float visitsA = float.Parse(a.Split('=')[1].Split(' ')[0]);
-            float visitsB = float.Parse(b.Split('=')[1].Split(' ')[0]);
-            return visitsB.CompareTo(visitsA);
-        });
+        var stats = rootNode.children.Select(child => new {
+            Column = child.priorMove + 1,
+            Visits = child.N,
+            Seldepth = child.GetMaxDepth(),
+            Mindepth = child.GetMinDepth(),
+            Value = child.Q,
+            Prior = child.prior
+        }).OrderByDescending(s => s.Visits);
         
         string statString = "";
         foreach (var stat in stats) {
-            statString += (stat+"\n");
+            float normalizedValue = (stat.Value + 1f) / 2f;
+            string valueColor = $"#{(int)(255):X2}{(int)(255 * (1-normalizedValue)):X2}00";
+            
+            statString += $"Col {stat.Column}: " +
+                         $"Visits=<color=#7098DB>{stat.Visits}/{totalVisits+1}</color> | " +
+                         $"Depth=<color=#B784D3>{stat.Mindepth}-{stat.Seldepth}</color> | " +
+                         $"Value=<color={valueColor}>{stat.Value:F3}</color> | " +
+                         $"Prior=<color=#75C7E5>{stat.Prior:F3}</color>\n";
         }
         Debug.Log(statString);
+    }
+
+    public static float[] GetPosition(ulong redBitboard, ulong yellowBitboard)
+    {
+        float[] result = new float[2 * 6 * 7 + 1];  // 85 elements total (84 board state + 1 parity)
+
+        int totalPieces = 0;
+        for (int row = 0; row < 6; row++)
+        {
+            for (int col = 0; col < 7; col++)
+            {
+                int bitPosition = 8 * col + row;
+                
+                bool isRed = (redBitboard & ((ulong)1 << bitPosition)) != 0;
+                bool isYellow = (yellowBitboard & ((ulong)1 << bitPosition)) != 0;
+                
+                // First 42 elements (0-41) represent red pieces
+                // Last 42 elements (42-83) represent yellow pieces
+                result[row * 7 + col] = isRed ? 1.0f : 0.0f;                  // Red channel
+                result[42 + row * 7 + col] = isYellow ? 1.0f : 0.0f;         // Yellow channel
+                
+                if (isRed || isYellow) totalPieces++;
+            }
+        }
+        
+        // Add parity bit as 85th element (1.0 for red's turn, 0.0 for yellow's turn)
+        result[84] = (totalPieces % 2 == 0) ? 1.0f : 0.0f;
+
+        return result;
+    }
+
+    void OnDestroy()
+    {
+        // Clear all resources
+        TreeNode.ClearTranspositionTable();
+        
+        // Clear neural networks
+        valueNetwork1 = null;
+        policyNetwork1 = null;
+        valueNetwork2 = null;
+        policyNetwork2 = null;
+        
+        // Force garbage collection
+        Resources.UnloadUnusedAssets();
+        System.GC.Collect();
+        System.GC.WaitForPendingFinalizers();
+    }
+
+    void OnDisable()
+    {
+        // Clear search state
+        rootNode = null;
+        board = null;
+        TreeNode.ClearTranspositionTable();
+    }
+
+    void LogMemoryUsage() {
+        long totalMemory = GC.GetTotalMemory(false);
+        Debug.Log($"Total Memory: {totalMemory / 1024 / 1024}MB");
+    }
+
+    void ClearAllResources() {
+        // Clear static caches
+        TreeNode.ClearTranspositionTable();
+        
+        // Clear instance references
+        rootNode = null;
+        board = null;
+        
+        // Clear neural networks
+        valueNetwork1 = null;
+        policyNetwork1 = null;
+        valueNetwork2 = null;
+        policyNetwork2 = null;
+        
+        // Force multiple levels of garbage collection
+        System.GC.Collect(2, GCCollectionMode.Forced, true);
+        System.GC.WaitForPendingFinalizers();
+        
+        // Unity specific cleanup
+        Resources.UnloadUnusedAssets();
     }
 }

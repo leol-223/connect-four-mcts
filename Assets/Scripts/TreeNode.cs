@@ -4,6 +4,7 @@ using System;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
+using System.Collections.Concurrent;
 
 public struct State
 {
@@ -20,7 +21,7 @@ public struct State
 }
 
 
-public class TreeNode {
+public class TreeNode : IDisposable {
     public List<TreeNode> children;
     public int priorMove;
     public State state;
@@ -53,9 +54,30 @@ public class TreeNode {
     private static int randomSeed = Environment.TickCount ^ Guid.NewGuid().GetHashCode();
 
     private const float EARLY_EXPLORE_FACTOR = 2.0f;
-    private const int EARLY_GAME_VISITS = 100;
-    private const int MIN_VISITS_BEFORE_COMMIT = 20;
+    private const int EARLY_GAME_VISITS = 0;
+    private const int MIN_VISITS_BEFORE_COMMIT = 0;
     private static bool useExplorationConstraints = true;
+
+    // Add cache size limits
+    private const int MAX_CACHE_SIZE = 1000000; // Adjust this value based on your memory constraints
+    private static readonly object cacheLockObject = new object();
+
+    // Replace single transposition table with separate ones for policy and value
+    public static readonly ConcurrentDictionary<long, float[]> policyCache 
+        = new ConcurrentDictionary<long, float[]>();
+    public static readonly ConcurrentDictionary<long, float> valueCache 
+        = new ConcurrentDictionary<long, float>();
+
+    // Add static flag for evaluation mode
+    private static bool useUniformEvaluation = false;
+    private static readonly object evaluationModeLock = new object();
+
+    private bool disposed = false;
+
+    // Add method to compute hash
+    private static long ComputeHash(State state) {
+        return state.redBitboard.GetHashCode() ^ (state.yellowBitboard.GetHashCode() * 31L);
+    }
 
     public TreeNode(NeuralNetwork valueNetwork, NeuralNetwork policyNetwork, State state) {
         this.valueNetwork = valueNetwork;
@@ -69,7 +91,7 @@ public class TreeNode {
         List<int> possibleMoves = GetValidMoves();
         children = new List<TreeNode>();
 
-        float[] policy = EvaluatePolicy(StateToInput(state));
+        float[] policy = EvaluatePolicy(state);
         float truePolicyVal = 0f;
 
         // Add validation for NaN values
@@ -105,12 +127,11 @@ public class TreeNode {
             }
             else
             {
-                float[] input = StateToInput(childState);
-                float rawEval = EvaluateValue(input);
+                float rawEval = EvaluateValue(childState);
                 child.eval = rawEval;
             }
 
-            child.prior = policy[move] / truePolicyVal;
+            child.prior = policy[move] / (float)truePolicyVal;
             children.Add(child);
         }        
     }
@@ -237,6 +258,19 @@ public class TreeNode {
         return maxDepth;
     }
 
+    public int GetMinDepth() {
+        if (children == null)
+        {
+            return depth;
+        }
+        int minDepth = 10000;
+        for (int i = 0; i < children.Count; i++)
+        {
+            minDepth = Mathf.Min(minDepth, children[i].GetMinDepth());
+        }
+        return minDepth;
+    }
+
     public void CreateChildrenWithRootNoise(float alpha, float epsilon)
     {
         CreateChildren();
@@ -277,8 +311,7 @@ public class TreeNode {
                 }
 
                 // Initialize all children at once
-                float[] input = StateToInput(state);
-                float initialValue = EvaluateValue(input);
+                float initialValue = EvaluateValue(state);
                 
                 foreach (var child in children) {
                     if (child.isTerminal) {
@@ -326,21 +359,16 @@ public class TreeNode {
         TreeNode bestChild = null;
         float bestScore = float.NegativeInfinity;
         
-        // Take snapshot of children stats
-        var childStats = new List<(TreeNode child, float N, float Q, float prior, bool needsExploration)>();
-        
+        // Take a single snapshot under one lock instead of multiple nested locks
+        List<(TreeNode child, float N, float Q, float prior, bool needsExploration)> childStats;
         lock(lockObject) {
-            foreach (var child in children) {
-                lock(child.lockObject) {
-                    childStats.Add((
-                        child,
-                        child.N,
-                        redToPlay ? child.Q : -child.Q,
-                        child.prior,
-                        child.N < MIN_VISITS_BEFORE_COMMIT
-                    ));
-                }
-            }
+            childStats = children.Select(child => (
+                child,
+                child.N,
+                redToPlay ? child.Q : -child.Q,
+                child.prior,
+                child.N < MIN_VISITS_BEFORE_COMMIT
+            )).ToList();
         }
 
         // First, check if any child needs minimum exploration
@@ -361,16 +389,56 @@ public class TreeNode {
         return bestChild;
     }
 
-    private float[] EvaluatePolicy(float[] input) {
-        lock(_networkLock) {
-            return policyNetwork.Forward(input);
+    private float[] EvaluatePolicy(State state) {
+        // Check if using uniform evaluation
+        lock(evaluationModeLock) {
+            if (useUniformEvaluation) {
+                float[] uniformPolicy = new float[7];
+                List<int> validMoves = GetValidMoves();
+                float uniformValue = 1.0f / validMoves.Count;
+                foreach (int move in validMoves) {
+                    uniformPolicy[move] = uniformValue;
+                }
+                return uniformPolicy;
+            }
         }
+
+        // Original neural network evaluation
+        long hash = ComputeHash(state);
+        
+        var result = policyCache.GetOrAdd(hash, _ => {
+            lock(_networkLock) {
+                if (policyCache.Count > MAX_CACHE_SIZE) {
+                    TrimCache(policyCache);
+                }
+                return policyNetwork.Forward(StateToInput(state));
+            }
+        });
+        
+        return result;
     }
     
-    private float EvaluateValue(float[] input) {
-        lock(_networkLock) {
-            return valueNetwork.Forward(input)[0];
+    private float EvaluateValue(State state) {
+        // Check if using uniform evaluation
+        lock(evaluationModeLock) {
+            if (useUniformEvaluation) {
+                return 0.0f;
+            }
         }
+
+        // Original neural network evaluation
+        long hash = ComputeHash(state);
+        
+        var result = valueCache.GetOrAdd(hash, _ => {
+            lock(_networkLock) {
+                if (valueCache.Count > MAX_CACHE_SIZE) {
+                    TrimCache(valueCache);
+                }
+                return valueNetwork.Forward(StateToInput(state))[0];
+            }
+        });
+            
+        return result;
     }
 
     private float GetUCTScore(float childN, float childQ, float childPrior, float totalVisits)
@@ -399,5 +467,104 @@ public class TreeNode {
     public static void SetExplorationConstraints(bool enabled)
     {
         useExplorationConstraints = enabled;
+    }
+
+    // Update clear method to handle both caches
+    public static void ClearTranspositionTable() {
+        try {
+            // Clear policy cache
+            if (policyCache != null) {
+                var oldPolicyCache = policyCache;
+                policyCache.Clear();
+                foreach (var kvp in oldPolicyCache) {
+                    oldPolicyCache.TryRemove(kvp.Key, out _);
+                }
+            }
+
+            // Clear value cache
+            if (valueCache != null) {
+                var oldValueCache = valueCache;
+                valueCache.Clear();
+                foreach (var kvp in oldValueCache) {
+                    oldValueCache.TryRemove(kvp.Key, out _);
+                }
+            }
+
+            // Trim memory more aggressively
+            GC.Collect(2, GCCollectionMode.Forced, true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, true);
+        }
+        catch (Exception e) {
+            Debug.LogError($"Error clearing transposition table: {e.Message}\n{e.StackTrace}");
+        }
+    }
+
+    // Add a method to monitor cache sizes
+    public static void LogCacheStats() {
+        long policyCacheSize = policyCache?.Count ?? 0;
+        long valueCacheSize = valueCache?.Count ?? 0;
+        Debug.Log($"Cache sizes - Policy: {policyCacheSize}, Value: {valueCacheSize}");
+    }
+
+    private static void TrimCache<T>(ConcurrentDictionary<long, T> cache)
+    {
+        if (cache.Count > MAX_CACHE_SIZE)
+        {
+            lock (cacheLockObject)
+            {
+                // Remove ~20% of entries when we hit the limit
+                int entriesToRemove = MAX_CACHE_SIZE / 5;
+                var keysToRemove = cache.Keys.Take(entriesToRemove).ToList();
+                foreach (var key in keysToRemove)
+                {
+                    cache.TryRemove(key, out _);
+                }
+            }
+        }
+    }
+
+    // Add public method to toggle evaluation mode
+    public static void SetUniformEvaluation(bool enabled) {
+        lock(evaluationModeLock) {
+            useUniformEvaluation = enabled;
+        }
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposed)
+        {
+            if (disposing)
+            {
+                if (children != null)
+                {
+                    foreach (var child in children)
+                    {
+                        child?.Dispose();
+                    }
+                    children.Clear();
+                    children = null;
+                }
+
+                // Clear references
+                valueNetwork = null;
+                policyNetwork = null;
+                state = default; // This is a struct, so it will be cleared
+            }
+            disposed = true;
+        }
+    }
+
+    // Add destructor
+    ~TreeNode()
+    {
+        Dispose(false);
     }
 }

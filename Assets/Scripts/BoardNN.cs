@@ -5,9 +5,11 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
 
-public class BoardNN
+public class BoardNN : IDisposable
 {
-    
+    private bool disposed = false;
+    private TreeNode currentRootNode;
+
     public enum Player { None, Red, Yellow };
     public enum NodeType
     {
@@ -55,16 +57,21 @@ public class BoardNN
         redBitboard = 0;
         yellowBitboard = 0;
         heights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        redHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
-        yellowHeights = new int[7] { 0, 0, 0, 0, 0, 0, 0 };
     }
 
     public TreeNode GetRootNode(bool isRed) {
+        // Dispose of previous root node if it exists
+        if (currentRootNode != null)
+        {
+            currentRootNode.Dispose();
+            currentRootNode = null;
+        }
+
         State state = new State(redBitboard, yellowBitboard, heights);
-        TreeNode rootNode = new TreeNode(valueNetwork, policyNetwork, state);
-        rootNode.redToPlay = isRed;
-        rootNode.depth = 0;
-        return rootNode;
+        currentRootNode = new TreeNode(valueNetwork, policyNetwork, state);
+        currentRootNode.redToPlay = isRed;
+        currentRootNode.depth = 0;
+        return currentRootNode;
     }
 
     public MoveEval BestMove(TreeNode rootNode, float temperature = 0f) {
@@ -349,17 +356,6 @@ public class BoardNN
         return heights[column] < 6;
     }
 
-    public static int CountBits(ulong value)
-    {
-        int count = 0;
-        while (value != 0)
-        {
-            count++;
-            value &= value - 1;
-        }
-        return count;
-    }
-
     public struct MoveEval
     {
         public MoveEval(int move, float eval)
@@ -400,5 +396,33 @@ public class BoardNN
         sb.AppendLine("  1   2   3   4   5   6   7  ");
         
         Debug.Log(sb.ToString());
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposed)
+        {
+            if (disposing)
+            {
+                currentRootNode?.Dispose();
+                currentRootNode = null;
+                
+                // Clear references but don't dispose shared networks
+                valueNetwork = null;
+                policyNetwork = null;
+            }
+            disposed = true;
+        }
+    }
+
+    ~BoardNN()
+    {
+        Dispose(false);
     }
 }
