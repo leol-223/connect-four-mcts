@@ -1300,15 +1300,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bae2ff9601fdf4e5c96709de95e97ccc, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  numGenerations: 1
+  numGenerations: 5
   startGeneration: 0
   generationIncrement: 0
-  numGames: 100
-  numEpochs: 10
+  numGames: 500
+  maxEpochs: 20
   initialIterations: 100
   iterationsGrowthRate: 1.05
   maxIterations: 400
-  modelName: Pain
+  modelName: M
   initialTemperature: 1
   temperatureDecay: 0.98
   initialRootNoise: 0.25

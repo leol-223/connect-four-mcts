@@ -59,7 +59,7 @@ public class TreeNode : IDisposable {
     private static bool useExplorationConstraints = true;
 
     // Add cache size limits
-    private const int MAX_CACHE_SIZE = 1000000; // Adjust this value based on your memory constraints
+    private const int MAX_CACHE_SIZE = 1000000;
     private static readonly object cacheLockObject = new object();
 
     // Replace single transposition table with separate ones for policy and value

@@ -161,8 +161,16 @@ public class NeuralNetwork
                 float[] delta = new float[layer.Biases.Length];
                 for (int o = 0; o < delta.Length; o++)
                 {
-                    float dAct = DerivativeActivate(layer.Outputs[o], act);
-                    delta[o] = outputError[o] * dAct;
+                    if (l == _layers.Count-1 && _loss == LossType.CrossEntropy && _outputActivation == ActivationType.Softmax)
+                    {
+                        // softmax + crossentropy cancels out
+                        delta[o] = outputError[o]; 
+                    }
+                    else
+                    {
+                        float dAct = DerivativeActivate(layer.Outputs[o], act);
+                        delta[o] = outputError[o] * dAct;
+                    }
                 }
 
                 // Update weights & biases
@@ -215,14 +223,27 @@ public class NeuralNetwork
         if (shuffle) 
             ShuffleData(inputs, targets);
 
+        var weightGrads = new float[_layers.Count][][];
+        var biasGrads = new float[_layers.Count][];
+        for (int l = 0; l < _layers.Count; l++)
+        {
+            int outSize = _layers[l].Biases.Length;
+            int inSize = _layers[l].Inputs.Length;
+            biasGrads[l] = new float[outSize];
+            weightGrads[l] = new float[outSize][];
+            for (int o = 0; o < outSize; o++) weightGrads[l][o] = new float[inSize];
+        }
+
         for (int start = 0; start < numSamples; start += batchSize)
         {
+            for(int l=0; l < _layers.Count; l++) {
+                Array.Clear(biasGrads[l], 0, biasGrads[l].Length);
+                for(int o=0; o < weightGrads[l].Length; o++) 
+                    Array.Clear(weightGrads[l][o], 0, weightGrads[l][o].Length);
+            }
+
             int end = Math.Min(start + batchSize, numSamples);
             int currentBatchSize = end - start;
-
-            // Allocate accumulators
-            var weightGrads = new float[_layers.Count][][];
-            var biasGrads   = new float[_layers.Count][];
 
             for (int l = 0; l < _layers.Count; l++)
             {

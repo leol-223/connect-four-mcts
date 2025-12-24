@@ -146,7 +146,7 @@ public class TrainBoard : MonoBehaviour
             policyLayers,
             NeuralNetwork.ActivationType.ReLU,
             NeuralNetwork.ActivationType.Softmax,
-            NeuralNetwork.LossType.MSE
+            NeuralNetwork.LossType.CrossEntropy
         );
 
         if (startGeneration+generationIncrement > 0) {
